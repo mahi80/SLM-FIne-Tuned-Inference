@@ -1,0 +1,111 @@
+name: images
+
+# Publishes the first-party images the deployment manifests reference. The
+# release manifests pin digests, not tags, so this job is the only place those
+# digests are minted. It runs on main only: a pull request builds nothing that
+# another repository could pull.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/gateway/**"
+      - "src/router/**"
+      - "src/tiersim/**"
+      - "src/eval/**"
+      - "finetune/**"
+      - "docker/*.Dockerfile"
+      - "config/eval-gates.yaml"
+      - ".github/workflows/images.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: publish images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Read the release tag
+        id: release
+        run: |
+          pip install -q pyyaml==6.0.3
+          tag=$(python -c "import yaml; print(yaml.safe_load(open('config/release.yaml'))['release_id'].rsplit('-', 1)[-1])")
+          owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "owner=$owner" >> "$GITHUB_OUTPUT"
+          echo "Publishing $tag for $owner from ${{ github.sha }}"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # provenance=false keeps the pushed reference a single image manifest:
+      # the digest then names exactly the image the manifests pull, not an
+      # attestation index around it.
+      - name: gateway
+        id: gateway
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/gateway.Dockerfile
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: |
+            ghcr.io/${{ steps.release.outputs.owner }}/slm-gateway:${{ steps.release.outputs.tag }}
+            ghcr.io/${{ steps.release.outputs.owner }}/slm-gateway:sha-${{ github.sha }}
+
+      - name: tiersim
+        id: tiersim
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/tiersim.Dockerfile
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: |
+            ghcr.io/${{ steps.release.outputs.owner }}/slm-tiersim:${{ steps.release.outputs.tag }}
+            ghcr.io/${{ steps.release.outputs.owner }}/slm-tiersim:sha-${{ github.sha }}
+
+      - name: eval
+        id: eval
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/eval.Dockerfile
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: |
+            ghcr.io/${{ steps.release.outputs.owner }}/slm-eval:${{ steps.release.outputs.tag }}
+            ghcr.io/${{ steps.release.outputs.owner }}/slm-eval:sha-${{ github.sha }}
+
+      - name: Record digests
+        run: |
+          owner='${{ steps.release.outputs.owner }}'
+          tag='${{ steps.release.outputs.tag }}'
+          {
+            echo "## Published images"
+            echo
+            echo "| image | digest |"
+            echo "|---|---|"
+            echo "| ghcr.io/$owner/slm-gateway:$tag | \`${{ steps.gateway.outputs.digest }}\` |"
+            echo "| ghcr.io/$owner/slm-tiersim:$tag | \`${{ steps.tiersim.outputs.digest }}\` |"
+            echo "| ghcr.io/$owner/slm-eval:$tag | \`${{ steps.eval.outputs.digest }}\` |"
+            echo
+            echo "Commit: \`${{ github.sha }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
