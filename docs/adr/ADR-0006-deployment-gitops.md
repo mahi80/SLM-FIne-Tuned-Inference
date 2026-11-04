@@ -144,8 +144,9 @@ Three properties from earlier phases made the deployment design non-obvious:
 - **Gateway availability is one pod.** `Recreate` and a single replica mean a short gap on
   restart and no node-failure tolerance. This is a deliberate consequence of in-process
   state, recorded here so it is not mistaken for an oversight.
-- **Hooks are part of the OpenShift overlay.** `kubectl apply -k` on that overlay creates
-  the hook Jobs immediately; the Argo annotations are inert without Argo CD. The vanilla
+- **Hooks are part of the OpenShift overlay.** Rendering that overlay with
+  `kubectl kustomize --load-restrictor LoadRestrictionsNone` and applying it creates the
+  hook Jobs immediately; the Argo annotations are inert without Argo CD. The vanilla
   overlay omits them.
 
 ## Alternatives rejected
