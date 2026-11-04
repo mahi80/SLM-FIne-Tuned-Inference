@@ -37,6 +37,36 @@ FALLBACKS = Counter(
     "Requests served by a fallback route",
     ["alias", "tier"],
 )
+ROUTE_DECISIONS = Counter(
+    "gateway_route_decisions_total",
+    "Routing decisions, by alias and kind",
+    ["alias", "kind"],
+)
+POLICY_REFUSALS = Counter(
+    "gateway_policy_refusals_total",
+    "Requests with no admissible candidate",
+    ["alias", "reason"],
+)
+CANARY = Counter(
+    "gateway_canary_requests_total",
+    "Requests served by a canary candidate",
+    ["alias", "candidate"],
+)
+SHADOW = Counter(
+    "gateway_shadow_requests_total",
+    "Shadow requests, by outcome",
+    ["alias", "candidate", "status"],
+)
+BREAKER_STATE = Gauge(
+    "gateway_breaker_state",
+    "Circuit breaker state: 0 closed, 1 half-open, 2 open",
+    ["alias", "candidate"],
+)
+POLICY_RELOADS = Counter(
+    "gateway_policy_reloads_total",
+    "Policy reload attempts",
+    ["result"],
+)
 
 
 def render() -> Response:

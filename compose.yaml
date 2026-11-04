@@ -87,20 +87,47 @@ services:
       timeout: 3s
       retries: 10
 
+  # Modelled cloud tier (single L4 profile). A standby that residency rules
+  # usually exclude: this is what makes region admission visible in the audit.
+  tiersim-cloud:
+    build:
+      context: .
+      dockerfile: docker/tiersim.Dockerfile
+    restart: unless-stopped
+    environment:
+      TIERSIM_PROFILE: ${TIERSIM_CLOUD_PROFILE:-gpu-l4-4b}
+      TIERSIM_MODEL_NAME: ${SERVED_MODEL_NAME:-slm-small}
+      TIERSIM_SPEEDUP: ${TIERSIM_SPEEDUP:-1}
+    ports:
+      - "${TIERSIM_CLOUD_PORT:-8012}:8001"
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3)"
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
   gateway:
     build:
       context: .
       dockerfile: docker/gateway.Dockerfile
     restart: unless-stopped
     environment:
-      ROUTES_FILE: /app/config/routes.yaml
+      POLICY_FILE: /app/config/policy.yaml
       TENANTS_FILE: /app/config/tenants.yaml
+      AUDIT_FILE: /var/lib/slm/audit.jsonl
     volumes:
       - ./config:/app/config:ro
+      - ./logs:/var/lib/slm
     ports:
       - "${GATEWAY_PORT:-8020}:8000"
     depends_on:
       tiersim-cpu:
+        condition: service_healthy
+      tiersim-cloud:
         condition: service_healthy
       vllm-gpu:
         condition: service_healthy
@@ -151,6 +178,7 @@ services:
     depends_on:
       - gateway
       - tiersim-cpu
+      - tiersim-cloud
 
   grafana:
     image: grafana/grafana:13.2.5

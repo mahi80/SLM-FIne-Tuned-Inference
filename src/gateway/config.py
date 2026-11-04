@@ -1,4 +1,4 @@
-"""Configuration loading for routes and tenants."""
+"""Configuration loading for tenants."""
 
 from __future__ import annotations
 
@@ -7,44 +7,19 @@ from pathlib import Path
 
 import yaml
 
+from router.policy import DATA_CLASSES, TIERS
 
-@dataclass(frozen=True)
-class Route:
-    alias: str
-    tier: str
-    backend: str
-    upstream_model: str
-    fallback: str | None = None
-    description: str = ""
-
-
-@dataclass(frozen=True)
-class RouteTable:
-    version: str
-    routes: dict[str, Route]
-
-    def get(self, alias: str) -> Route | None:
-        return self.routes.get(alias)
-
-
-def load_routes(path: str) -> RouteTable:
-    data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
-    routes: dict[str, Route] = {}
-    for alias, spec in (data.get("routes") or {}).items():
-        routes[alias] = Route(
-            alias=alias,
-            tier=spec["tier"],
-            backend=str(spec["backend"]).rstrip("/"),
-            upstream_model=spec.get("upstream_model", alias),
-            fallback=spec.get("fallback"),
-            description=spec.get("description", ""),
-        )
-    if not routes:
-        raise ValueError(f"no routes defined in {path}")
-    for name, route in routes.items():
-        if route.fallback and route.fallback not in routes:
-            raise ValueError(f"route '{name}' falls back to unknown alias '{route.fallback}'")
-    return RouteTable(version=str(data.get("version", "1")), routes=routes)
+TENANT_KEYS = {
+    "id",
+    "api_key",
+    "rpm",
+    "region",
+    "data_class",
+    "allowed_aliases",
+    "allowed_tiers",
+    "allow_cloud",
+    "admin",
+}
 
 
 @dataclass(frozen=True)
@@ -52,14 +27,68 @@ class Tenant:
     id: str
     api_key: str
     rpm: int
+    region: str = "us"
+    data_class: str = "internal"
+    allowed_aliases: tuple[str, ...] = ()
+    allowed_tiers: tuple[str, ...] = ()
+    allow_cloud: bool = False
+    admin: bool = False
+
+
+def _string_list(value, field: str, tenant_id: str) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
+        raise ValueError(f"tenant '{tenant_id}': {field} must be a list of non-empty strings")
+    return tuple(value)
 
 
 def load_tenants(path: str) -> list[Tenant]:
     data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
-    tenants = [
-        Tenant(id=item["id"], api_key=item["api_key"], rpm=int(item.get("rpm", 120)))
-        for item in data.get("tenants") or []
-    ]
+    tenants: list[Tenant] = []
+    for item in data.get("tenants") or []:
+        if not isinstance(item, dict):
+            raise ValueError(f"{path}: each tenant must be a mapping")
+        unknown = item.keys() - TENANT_KEYS
+        if unknown:
+            raise ValueError(f"{path}: tenant uses unknown keys {sorted(unknown)}")
+        tenant_id = str(item.get("id", "")).strip()
+        if not tenant_id:
+            raise ValueError(f"{path}: tenant id must not be empty")
+        api_key = str(item.get("api_key", ""))
+        if not api_key:
+            raise ValueError(f"tenant '{tenant_id}': api_key must not be empty")
+        rpm = int(item.get("rpm", 120))
+        if rpm <= 0:
+            raise ValueError(f"tenant '{tenant_id}': rpm must be positive")
+        region = str(item.get("region", "us"))
+        data_class = str(item.get("data_class", "internal"))
+        if data_class not in DATA_CLASSES:
+            raise ValueError(
+                f"tenant '{tenant_id}': data_class must be one of {sorted(DATA_CLASSES)}"
+            )
+        allowed_tiers = _string_list(item.get("allowed_tiers"), "allowed_tiers", tenant_id)
+        unknown_tiers = set(allowed_tiers) - TIERS
+        if unknown_tiers:
+            raise ValueError(f"tenant '{tenant_id}': unknown tiers {sorted(unknown_tiers)}")
+        tenants.append(
+            Tenant(
+                id=tenant_id,
+                api_key=api_key,
+                rpm=rpm,
+                region=region,
+                data_class=data_class,
+                allowed_aliases=_string_list(
+                    item.get("allowed_aliases"), "allowed_aliases", tenant_id
+                ),
+                allowed_tiers=allowed_tiers,
+                allow_cloud=bool(item.get("allow_cloud", False)),
+                admin=bool(item.get("admin", False)),
+            )
+        )
     if not tenants:
         raise ValueError(f"no tenants defined in {path}")
+    ids = [tenant.id for tenant in tenants]
+    if len(ids) != len(set(ids)):
+        raise ValueError(f"{path}: duplicate tenant id")
     return tenants

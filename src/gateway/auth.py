@@ -14,6 +14,10 @@ class TenantRegistry:
         self._tenants = tenants
         self._windows: dict[str, deque[float]] = {t.id: deque() for t in tenants}
 
+    @property
+    def all(self) -> list[Tenant]:
+        return list(self._tenants)
+
     def resolve(self, token: str) -> Tenant | None:
         # Compare against every key in constant time so a rejected request does
         # not reveal, through timing, how close a guess was.

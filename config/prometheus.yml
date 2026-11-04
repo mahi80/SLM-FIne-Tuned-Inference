@@ -11,6 +11,10 @@ scrape_configs:
     static_configs:
       - targets: ["tiersim-cpu:8001"]
 
+  - job_name: tiersim-cloud
+    static_configs:
+      - targets: ["tiersim-cloud:8001"]
+
   - job_name: vllm
     static_configs:
       - targets: ["vllm-gpu:8000"]

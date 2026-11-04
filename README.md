@@ -3,8 +3,9 @@
 Private, provider-agnostic serving for fine-tuned small language models — a runnable
 reference platform, not a slide deck.
 
-**Status:** Phase 2 of 6 — GPU tier, gateway, simulated CPU tier, observability and two
-QLoRA adapters are live and measured.
+**Status:** Phase 3 of 6 — GPU tier, gateway, simulated CPU and cloud tiers, observability,
+two QLoRA adapters and a policy-driven router with canary, breakers and a hash-chained audit
+trail are live and measured.
 
 ---
 
@@ -36,12 +37,14 @@ the distinction explicit:
 |---|---|---|
 | GPU tier (vLLM, AWQ W4A16, multi-LoRA capable) | **Measured** | `make smoke`, tables below |
 | Fine-tuned adapters (QLoRA v1/v2, hot load / unload) | **Measured** | `make adapter-train`, `make adapter-smoke`, eval table below |
-| Gateway (auth, quotas, streaming proxy, audit) | **Measured** | `make smoke-gateway` |
+| Gateway (auth, quotas, streaming proxy, policy router, audit) | **Measured** | `make smoke-gateway` |
+| Router (admission, canary, shadow, circuit breakers, reload) | **Measured** | `make smoke-policy`, outage drill below |
+| Hash-chained audit + verification | **Measured** | `GET /v1/audit/verify` |
 | Observability (Prometheus + provisioned Grafana) | **Measured** | dashboard `slm-platform`, 7 panels |
 | CPU tier (OpenVINO / llama.cpp on Xeon/EPYC) | **Modelled** — calibrated simulator, no Xeon on this laptop | `src/tiersim`, labelled `x-simulated: true` |
-| Cloud burst tiers (EKS / AKS / GKE) | Profile defined, not wired | `src/tiersim/profiles.py` |
+| Cloud burst tier (L4 profile) | **Modelled and wired** — a standby that residency usually excludes | `tiersim-cloud`, `x-simulated: true` |
 | OpenShift / air-gapped deployment | **Static validation** — manifests render and pass policy checks; no cluster available | `deploy/openshift` |
-| Router policy engine, governance, release pipeline | Planned (Phases 3–5) | — |
+| Governance, signed releases, full pipeline | Planned (Phases 4–6) | — |
 
 Numbers from a simulated tier are labelled `MODELLED` everywhere they appear.
 
@@ -80,7 +83,9 @@ Python 3.10+, ~12 GB free VRAM and ~15 GB disk.
 make gpu-check     # NVIDIA GPU visible inside a container
 make up            # build, pull, download weights, wait until every service is healthy
 make smoke         # GPU tier directly
-make smoke-gateway # both tiers through the gateway
+make smoke-gateway # all tiers through the gateway
+make smoke-policy  # admission, residency veto, canary stability, audit chain
+make test          # router unit tests (stdlib unittest)
 make adapter-train # QLoRA adapters v1/v2, then hot-load them (takes the GPU ~25 min)
 make adapter-smoke # adapter aliases end to end through the gateway
 make adapter-eval  # base vs v1 vs v2 on the held-out triage set
@@ -93,7 +98,8 @@ make down          # stop (model cache and dashboards are kept)
 | Gateway (OpenAI API) | http://localhost:8020 | `Authorization: Bearer dev-acme-key` |
 | GPU tier | http://localhost:8010 | direct; bypasses the gateway |
 | CPU tier (simulated) | http://localhost:8011 | direct; responses carry `x-simulated: true` |
-| Prometheus | http://localhost:9090 | scrapes gateway, simulator and vLLM |
+| Cloud tier (simulated) | http://localhost:8012 | L4 profile; a residency-gated standby |
+| Prometheus | http://localhost:9090 | scrapes gateway, both simulators and vLLM |
 | Grafana | http://localhost:3001 | `admin` / `admin`, dashboard **SLM Serving Fabric** |
 
 Clients send the same OpenAI request to the gateway and pick a tier with the model alias:
@@ -105,10 +111,11 @@ curl -s http://localhost:8020/v1/chat/completions \
   -d '{"model":"slm-small","messages":[{"role":"user","content":"hello"}],"max_tokens":32}'
 ```
 
-`slm-small` resolves to the GPU tier, `slm-small-cpu` to the simulated CPU tier, and
-`slm-triage` / `slm-triage-v2` to the two fine-tuned adapters on the same GPU tier. Clients
-address an alias, never a weights path — that indirection is what lets a release swap
-weights or an adapter without touching application code.
+`slm-small` prefers the GPU tier and has CPU and cloud standbys; `slm-small-cpu` pins the
+simulated CPU tier; `slm-triage` is a release alias (v1 primary, v2 canary at 50% sticky per
+tenant) and `slm-triage-v2` pins v2. Clients address an alias, never a weights path or a
+tier — that indirection is what lets the router honour residency and what lets a release
+swap weights without touching application code.
 
 Host ports are configurable in `.env`; 8000 is deliberately avoided because it is commonly
 already taken on developer machines.
@@ -169,8 +176,18 @@ and wins only against an already-idle GPU, a latency-tolerant deadline, or no GP
 
 ### Failover is proven, not asserted
 
-With the GPU container stopped, `slm-small` returned **200 from the CPU tier** with
-`x-tier: cpu` and `x-fallback: true`. The GPU was then restarted and served normally.
+With the GPU container stopped, `slm-small` stayed at **200**. The first requests failed over
+at the transport level (`x-fallback: true`); after three failures the breaker opened and the
+router selected the standby directly. Residency decided *which* standby:
+
+| Tenant | Region / class | Served by | Why |
+|---|---|---|---|
+| acme | eu / confidential | CPU tier | `cloud-us: region-veto`; EU data stays on an owned tier |
+| globex | us / internal | Cloud tier (MODELLED) | US data, cloud allowed, cheapest admissible standby |
+
+The GPU was then restarted, adapters were hot-loaded again and the breaker returned to
+closed on the next successful request. The breaker state and the full admission trace are in
+[Routing is a policy, not a table](#routing-is-a-policy-not-a-table).
 
 ---
 
@@ -180,23 +197,154 @@ Every response carries its routing decision:
 
 | Header | Meaning |
 |---|---|
-| `x-request-id` | Correlates the audit line, gateway metrics and upstream logs |
-| `x-route-alias` | The route that actually served the request |
-| `x-tier` | `gpu`, `cpu` (later also `cloud`) |
-| `x-route-reason` | Why this route was chosen — static in Phase 1, policy-driven in Phase 3 |
-| `x-policy-version` | Version of the table or policy that decided |
-| `x-fallback` | `true` when the primary route failed and the fallback served |
+| `x-request-id` | Correlates the audit record, gateway metrics and upstream logs |
+| `x-route-alias` | The alias the client asked for |
+| `x-tier` | `gpu`, `cpu` or `cloud` |
+| `x-route-reason` | `policy:<primary\|canary\|standby>:<candidate>[:fallback]` |
+| `x-policy-version` | Version of the policy file that decided |
+| `x-fallback` | `true` when the chosen candidate failed and a later attempt served |
+| `x-canary` | `true` when the served candidate came from the canary slice |
+| `x-model-version` | The model version that actually answered |
+| `x-shadow` | Candidate that received a shadow copy, when one was sampled |
 | `x-simulated` | Present and `true` only for modelled tiers |
 
 Working today: bearer auth with constant-time key comparison, per-tenant sliding-window
-RPM limits (429 with `Retry-After`), unbuffered streaming pass-through, usage accounting
-taken from upstream, one structured audit line per request, and one fallback attempt on
-connection failure.
+RPM limits (429 with `Retry-After`), admission and scoring per request, deterministic
+canary, shadow sampling, per-candidate circuit breakers, unbuffered streaming pass-through,
+usage accounting from upstream, hash-chained audit records, live policy reload, decision
+explain and audit verification.
 
-Deliberately absent until Phase 3: quality-aware routing, shadow traffic, circuit breakers,
-and a shared quota counter for multi-replica gateways. The in-memory limiter is explicitly
-single-replica; pretending otherwise would be the kind of gap that fails an architecture
-review.
+Deliberately still absent: a shared quota counter for multi-replica gateways (the limiter is
+in-memory and explicitly single-replica), and quality-aware scoring that uses eval results
+rather than static cost and priority. Pretending otherwise would be the kind of gap that
+fails an architecture review.
+
+---
+
+## Routing is a policy, not a table
+
+`config/policy.yaml` is versioned data. An alias is what a client asks for; each candidate
+is a place the request can run: tier, backend, region, sovereignty, context budget,
+priority, cost and model version. The router **admits before it scores**, so a cheap tier
+never wins a request it is not entitled to serve.
+
+Admission, in order:
+
+1. the tenant's alias allowlist;
+2. the tenant's tier allowlist;
+3. cloud permission (`allow_cloud`);
+4. region match against `serves_regions`;
+5. data class vs sovereignty — `confidential` and `restricted` never leave owned tiers;
+6. context budget — estimated prompt + `max_tokens` must fit `max_context`;
+7. breaker state — an open candidate is not a route.
+
+Only admissible candidates are considered. The primary wins by default; otherwise the
+canary slice is applied; otherwise the best standby by
+`priority*100 + cost_per_1k_out*1000 + failure_rate*50`. Every excluded candidate carries a
+reason (`region-veto`, `cloud-denied`, `sovereignty-veto`, `context-exceeded`,
+`breaker-open`, `alias-denied`, …) into the explain endpoint and the audit record.
+
+### Canary and shadow
+
+`slm-triage` keeps v1 as primary and sends v2 to a deterministic 50% slice:
+`blake2b("canary:slm-triage", tenant-or-request) mod 100`. Sticky per tenant, so a tenant
+does not flip versions between requests; no shared counter is needed and a gateway restart
+does not reshuffle the assignment. Measured buckets here: **acme 67 (v1)**, **globex 37
+(v2)**.
+
+A shadow copy (`slm-triage` → v2, 5%, `max_tokens` capped at 64) is sent for primary
+traffic and discarded; it is audited as a separate `shadow` record and counted by
+`gateway_shadow_requests_total`. The header `x-shadow` names the target.
+
+```bash
+# promote v2 to 100%, then roll back with a file edit and a reload
+curl -s -X POST http://localhost:8020/v1/policy/reload \
+  -H 'Authorization: Bearer dev-acme-key'
+```
+
+Reload is atomic: an invalid YAML file returns **422** and the previous policy keeps
+serving. Measured rollback: setting the canary to 0% moved globex from
+`policy:canary:v2` to `policy:primary:v1` on the next request, with no restart.
+
+### Circuit breakers
+
+Health is tracked per `alias:candidate`, not per backend, so one alias's failure does not
+blind another. Three failures inside 60 s open the breaker for 20 s; one probe is admitted
+in half-open; success closes it, failure reopens it. Connection errors, timeouts and 5xx
+responses count as failures; 4xx does not. When the chosen candidate fails, the gateway
+walks the ordered attempt list built from the same admission pass — never an inadmissible
+candidate.
+
+### Measured outage drill
+
+With the GPU container stopped:
+
+| Request | Tenant | Tier | `x-route-reason` | `x-fallback` |
+|---|---|---|---|---|
+| 1–3 | acme (eu) | cpu | `policy:primary:cpu:fallback` | `true` |
+| 4 | acme (eu) | cpu | `policy:standby:cpu` | `false` |
+| 1–4 | globex (us) | cloud | `policy:standby:cloud-us` | `false` |
+
+The breaker is shared by alias, so acme's three failures opened `slm-small:gpu` for globex
+too. The audit record for acme carries `vetoed: ["cloud-us:region-veto"]`; globex has no
+such veto and the cloud candidate wins on score. This is the difference between a fallback
+chain and a policy: the fallback for EU confidential traffic is the CPU tier, even though
+the cloud tier is cheaper and faster.
+
+Recovery is equally boring: start the GPU, hot-load the adapters, send one request. The
+half-open probe succeeds and the breaker returns to closed.
+
+### The audit trail
+
+`logs/audit.jsonl` gets one record per inference and one per shadow request. Each record
+commits to its predecessor:
+
+```text
+hash = sha256(canonical_json(record without hash))
+```
+
+so editing, removing or reordering a record breaks verification from that point on. The
+gateway recovers the head on startup, drops a torn final line (crash between write and
+newline), and refuses to start if anything earlier fails verification. `GET
+/v1/audit/verify` recomputes the chain:
+
+```json
+{"ok": true, "records": 65, "last_seq": 65,
+ "last_hash": "cb8e9565f625e4fee35272587afe0e4fc71aa853b7a023318128170bbd82d3dc"}
+```
+
+This is tamper **evidence**, not prevention: a writer with filesystem access can rewrite the
+whole chain. Production must ship the head hash to a separate sink with object-lock or
+append-only retention. Audit writes are fsync'd per record; a disk error is logged loudly
+and does not fail the request, which is a deliberate availability-over-evidence trade-off
+for this reference build, not a compliance posture.
+
+### Policy endpoints
+
+| Endpoint | Role | Purpose |
+|---|---|---|
+| `GET /v1/policy` | admin | Active policy, breakers and their state |
+| `POST /v1/policy/explain` | tenant | Full admission trace for a hypothetical request |
+| `POST /v1/policy/reload` | admin | Validate and swap the file; 422 keeps the old policy |
+| `GET /v1/audit/verify` | admin | Recompute the hash chain |
+
+```text
+$ make smoke-policy
+health    4 aliases, policy 2026-11-04.1
+policy    4 aliases, breaker {'failures': 3, 'window_s': 60.0, 'open_s': 20.0}
+admission acme/eu   chosen=gpu vetoed={'cloud-us': 'region-veto'}
+admission globex    refused=alias-denied
+canary    globex bucket=37 percent=50 decision=canary chosen=v2
+audit     ok, 65 records, head cb8e9565f625e4f...
+auth      non-admin policy read is 403
+PASS
+```
+
+New metrics: `gateway_route_decisions_total`, `gateway_policy_refusals_total`,
+`gateway_canary_requests_total`, `gateway_shadow_requests_total`,
+`gateway_breaker_state` (0 closed, 1 half-open, 2 open), `gateway_policy_reloads_total`.
+
+The full design rationale is in [ADR-0004](docs/adr/ADR-0004-policy-router.md).
 
 ---
 
@@ -293,15 +441,17 @@ hyper-parameters and the loss curve.
 ```
 compose.yaml                     the whole platform: tiers, gateway, observability
 Makefile                         operational entry points
-config/routes.yaml               alias → backend table (Phase 3 replaces the lookup)
-config/tenants.example.yaml      tenant keys and quotas; tenants.yaml is gitignored
+config/policy.yaml               versioned routing policy: aliases, candidates, canary
+config/tenants.example.yaml      tenant keys, quotas, region, data class; tenants.yaml is gitignored
 scripts/smoke.py                 GPU tier smoke test
-scripts/smoke_gateway.py         end-to-end test through the gateway, both tiers
+scripts/smoke_gateway.py         end-to-end test through the gateway, all tiers
+scripts/smoke_policy.py          admission, residency, canary stability, audit chain
 scripts/smoke_adapters.py        adapter aliases and contract check through the gateway
 scripts/load_adapters.py         runtime load of every adapter into vLLM
+tests/                           router unit tests (stdlib unittest)
 docker/                          gateway, simulator and QLoRA training images
-src/gateway/                     OpenAI-compatible API, auth, quotas, proxy, audit
-src/router/                      policy engine: admissibility, tier scoring, breakers
+src/gateway/                     OpenAI-compatible API, auth, quotas, proxy, policy use, audit
+src/router/                      policy model, admission, canary, breakers, hash-chained audit
 src/tiersim/                     calibrated CPU / cloud tier simulator
 src/registry/                    signed model release manifests
 src/eval/                        golden sets, deterministic checks, drift detection
@@ -350,13 +500,14 @@ reproduces prefill, per-token decode and queueing from a documented profile, and
 response `x-simulated: true`. Its numbers are labelled MODELLED. Its job is to let the
 router, dashboards and cost model be built before CPU hardware exists.
 
-**Routing is a table, but the contract is already final.** Phase 3 swaps the lookup for
-policy evaluation; clients already see `x-route-reason`, `x-policy-version` and `x-fallback`,
-so the client contract will not change when the policy engine arrives.
+**Routing is a table, but the contract is already final.** Phase 1 shipped a static table so
+the client contract could settle first. Phase 3 replaced the lookup with policy evaluation
+without changing `x-route-reason`, `x-policy-version` or `x-fallback`.
 
-**Fallback is connection-level only.** A refused connection fails over to the next route; a
-500 does not, because silently downgrading a tier after an application error hides bugs.
-Quality-aware failover is a Phase 3 policy decision.
+**Fallback is a health decision, not a blind retry.** Phase 1 failed over only on a refused
+connection. Phase 3 widened the signal to connection errors, timeouts and 5xx, which mark
+the candidate unhealthy and walk the ordered attempt list; 4xx is returned unchanged because
+a bad request is not a sick backend.
 
 **No buffering in the proxy.** Responses are relayed chunk by chunk. The injected
 `stream_options.include_usage` is stripped unless the client asked for it, so usage can be
@@ -383,6 +534,30 @@ git-ignored, recorded in `training.json`, reproducible with one command.
 **Adapters do not pretend to have a CPU fallback.** The simulator cannot serve LoRA, so the
 adapter aliases declare no fallback and fail fast rather than answering with the wrong model.
 
+### Phase 3
+
+**Admission is not a scoring input.** A candidate that fails residency, data-class, tenant
+or context rules cannot be rescued by a better score. Keeping eligibility and preference
+separate is what makes a routing decision explainable to an auditor: a veto has a name and a
+record, not a weight.
+
+**The policy is data with an atomic reload.** The file is validated into immutable objects
+and swapped as a unit. A syntax error returns 422 and the previous policy keeps serving.
+Breaker state survives the swap because backend health is orthogonal to routing intent.
+
+**Canary assignment must be stable and stateless.** `blake2b(alias, tenant) mod 100` gives
+sticky assignment with no shared counter, so multi-replica gateways agree and a restart does
+not reshuffle tenants. Pinning the percentage to 0 is a rollback; raising it is a promotion.
+
+**Breakers are per `alias:candidate`, not per host.** One alias tripping does not blind
+another alias on the same GPU, and a standby is only selected when the primary is not
+admissible. Half-open admits one probe, so recovery does not stampede a starting backend.
+
+**An audit trail is only useful if it is verifiable.** Every record commits to the previous
+one, the gateway refuses to start on a broken chain, and verification is an endpoint rather
+than a script someone might forget to run. The head hash still needs an external sink for
+tamper resistance; that limit is stated rather than hidden.
+
 ---
 
 ## Roadmap
@@ -392,8 +567,8 @@ adapter aliases declare no fallback and fail fast rather than answering with the
 | 0 | Scaffold, GPU passthrough, vLLM serving, smoke test | **Done** |
 | 1 | Gateway, CPU tier simulator, Prometheus + Grafana | **Done** |
 | 2 | QLoRA adapters v1/v2, multi-LoRA hot loading | **Done** |
-| 3 | Router policy engine, canary, audit trail | Next |
-| 4 | Benchmarks, eval harness, cost model | |
+| 3 | Router policy engine, canary, audit trail | **Done** |
+| 4 | Benchmarks, eval harness, cost model | Next |
 | 5 | OpenShift / air-gap manifests, GitOps, admission policy | |
 | 6 | ADRs, C4 diagrams, architecture sign-off pack | |
 

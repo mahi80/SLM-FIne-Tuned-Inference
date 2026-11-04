@@ -1,11 +1,23 @@
 # Development tenants only. `make env` copies this to tenants.yaml, which is
 # gitignored. Replace every key before the gateway is reachable from anywhere
-# other than localhost; Phase 3 moves these into the policy store.
+# other than localhost.
+#
+# region and data_class are policy inputs, not metadata: the router will not
+# place a tenant's traffic on a backend that cannot legally serve it.
 tenants:
   - id: acme
     api_key: dev-acme-key
     rpm: 120
+    region: eu
+    data_class: confidential
+    allow_cloud: true      # EU cloud regions would be acceptable; us-east is not
+    admin: true
 
   - id: globex
     api_key: dev-globex-key
     rpm: 30
+    region: us
+    data_class: internal
+    allow_cloud: true
+    # Tenants pick an alias, not a tier; slm-small-cpu stays unavailable.
+    allowed_aliases: [slm-small, slm-triage, slm-triage-v2]

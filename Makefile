@@ -3,7 +3,7 @@ DC := docker compose
 
 .DEFAULT_GOAL := help
 
-.PHONY: help env gpu-check build up down logs ps smoke smoke-gateway metrics health health-gateway clean \
+.PHONY: help env gpu-check build up down logs ps test smoke smoke-gateway smoke-policy metrics health health-gateway clean \
         adapter-data adapter-train adapters adapter-eval adapter-smoke
 
 help: ## Show available targets
@@ -35,8 +35,14 @@ ps: ## Show container status and health
 smoke: ## Smoke-test the GPU tier directly
 	@python scripts/smoke.py
 
-smoke-gateway: ## Smoke-test both tiers through the gateway
+smoke-gateway: ## Smoke-test all tiers through the gateway
 	@python scripts/smoke_gateway.py
+
+smoke-policy: ## Check admission, canary stability and the audit chain
+	@python scripts/smoke_policy.py
+
+test: ## Run the router unit tests
+	PYTHONPATH=src python -m unittest discover -s tests -v
 
 metrics: ## Print a sample of gateway metrics
 	@curl -s http://localhost:8020/metrics | grep -E '^gateway_' | head -20

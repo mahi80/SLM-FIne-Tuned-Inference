@@ -103,7 +103,7 @@ def main() -> None:
     status, _, health = http("/health")
     if status != 200:
         _fail(f"/health returned {status}: {health}")
-    print(f"health    ok ({health.get('routes')} routes, {health.get('policy_version')})")
+    print(f"health    ok ({health.get('aliases')} aliases, {health.get('policy_version')})")
 
     status, _, models = http("/v1/models")
     aliases = [item["id"] for item in models.get("data", [])]
@@ -123,6 +123,8 @@ def main() -> None:
         _fail("GPU tier returned no content")
     if gpu["headers"].get("x-tier") != "gpu":
         _fail(f"GPU route reported tier {gpu['headers'].get('x-tier')}")
+    if not gpu["headers"].get("x-policy-version"):
+        _fail("GPU route did not report a policy version")
     print(
         f"gpu       {gpu['headers'].get('x-tier')} tier, "
         f"ttft {gpu['ttft']:.3f}s, {len(gpu['text'].split())} words, "

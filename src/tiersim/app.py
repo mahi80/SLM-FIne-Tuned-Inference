@@ -1,4 +1,4 @@
-"""Simulated CPU tier.
+"""Simulated compute tier (CPU or cloud, selected by profile).
 
 Speaks the same OpenAI-compatible contract as the GPU tier and borrows the GPU
 tier's timing shape: prefill first, then one decode step per token, with a bounded

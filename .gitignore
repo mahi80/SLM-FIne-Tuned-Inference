@@ -1,5 +1,6 @@
 .env
 config/tenants.yaml
+logs/
 .venv/
 __pycache__/
 *.py[cod]

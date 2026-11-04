@@ -9,6 +9,7 @@ COPY src/gateway/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 COPY src/gateway /app/gateway
+COPY src/router /app/router
 
 EXPOSE 8000
 
