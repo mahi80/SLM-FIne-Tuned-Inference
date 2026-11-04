@@ -5,3 +5,6 @@ __pycache__/
 *.py[cod]
 .DS_Store
 *.log
+
+# Trained adapter weights are artifacts, not source. Reproduce with `make adapter-train`.
+adapters/*/

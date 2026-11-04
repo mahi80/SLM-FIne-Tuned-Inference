@@ -1,0 +1,141 @@
+{
+  "eval": "finetune/data/eval.jsonl",
+  "url": "http://localhost:8010",
+  "n": 200,
+  "models": [
+    {
+      "model": "slm-small",
+      "n": 200,
+      "errors": 0,
+      "strict_json_rate": 1.0,
+      "lenient_json_rate": 1.0,
+      "schema_rate": 0.99,
+      "exact_labels_rate": 0.195,
+      "field_accuracy": {
+        "category": 0.8,
+        "priority": 0.7,
+        "sentiment": 0.81,
+        "escalate": 0.76,
+        "product": 0.38
+      },
+      "summary_ok_rate": 0.99,
+      "slices": {
+        "clean": {
+          "n": 80,
+          "schema": 0.988,
+          "exact": 0.237
+        },
+        "hard": {
+          "n": 80,
+          "schema": 0.988,
+          "exact": 0.15
+        },
+        "held-out": {
+          "n": 40,
+          "schema": 1.0,
+          "exact": 0.2
+        }
+      },
+      "invalid_counts": {
+        "schema": 2,
+        "labels": 198
+      },
+      "failures": [
+        {
+          "id": "account-suspicious-login-p2-1",
+          "raw": "{\"category\": \"security\", \"priority\": \"P1\", \"sentiment\": \"negative\", \"escalate\": true, \"product\": \"portal\", \"summary\": \"Admin credentials likely leaked and used abroad\"}"
+        },
+        {
+          "id": "hard-phishing-p3-20",
+          "raw": "{\"category\": \"security\", \"priority\": \"P1\", \"sentiment\": \"negative\", \"escalate\": true, \"product\": null, \"summary\": \"Operator compromised by phishing call; credentials must be revoked\"}"
+        }
+      ]
+    },
+    {
+      "model": "triage-v1",
+      "n": 200,
+      "errors": 0,
+      "strict_json_rate": 1.0,
+      "lenient_json_rate": 1.0,
+      "schema_rate": 0.99,
+      "exact_labels_rate": 0.735,
+      "field_accuracy": {
+        "category": 0.985,
+        "priority": 0.85,
+        "sentiment": 0.865,
+        "escalate": 0.93,
+        "product": 0.96
+      },
+      "summary_ok_rate": 0.99,
+      "slices": {
+        "clean": {
+          "n": 80,
+          "schema": 1.0,
+          "exact": 0.775
+        },
+        "hard": {
+          "n": 80,
+          "schema": 0.975,
+          "exact": 0.575
+        },
+        "held-out": {
+          "n": 40,
+          "schema": 1.0,
+          "exact": 0.975
+        }
+      },
+      "invalid_counts": {
+        "labels": 198,
+        "schema": 2
+      },
+      "failures": [
+        {
+          "id": "hard-feature-request-p3-44",
+          "raw": "{\"category\": \"feature request\", \"priority\": \"P4\", \"sentiment\": \"positive\", \"escalate\": false, \"product\": \"GateLink controller\", \"summary\": \"Thanks for the Parquet export option\"}"
+        },
+        {
+          "id": "hard-feature-request-p3-6",
+          "raw": "{\"category\": \"feature request\", \"priority\": \"P4\", \"sentiment\": \"positive\", \"escalate\": false, \"product\": \"ThermoQ sensor\", \"summary\": \"Thanks for the Parquet export feature\"}"
+        }
+      ]
+    },
+    {
+      "model": "triage-v2",
+      "n": 200,
+      "errors": 0,
+      "strict_json_rate": 1.0,
+      "lenient_json_rate": 1.0,
+      "schema_rate": 1.0,
+      "exact_labels_rate": 0.79,
+      "field_accuracy": {
+        "category": 0.97,
+        "priority": 1.0,
+        "sentiment": 0.86,
+        "escalate": 0.93,
+        "product": 0.97
+      },
+      "summary_ok_rate": 1.0,
+      "slices": {
+        "clean": {
+          "n": 80,
+          "schema": 1.0,
+          "exact": 0.85
+        },
+        "hard": {
+          "n": 80,
+          "schema": 1.0,
+          "exact": 0.762
+        },
+        "held-out": {
+          "n": 40,
+          "schema": 1.0,
+          "exact": 0.725
+        }
+      },
+      "invalid_counts": {
+        "labels": 200
+      },
+      "failures": []
+    }
+  ]
+}

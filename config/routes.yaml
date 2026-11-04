@@ -15,3 +15,18 @@ routes:
     backend: http://tiersim-cpu:8001
     upstream_model: slm-small
     description: "Xeon-class CPU tier (MODELLED - calibrated simulator)"
+
+  # Fine-tuned adapters on the same GPU tier. Each alias is a separate model
+  # name on the vLLM server, so a release is a routing change, not a redeploy.
+  # No CPU fallback: the simulator cannot serve adapters.
+  slm-triage:
+    tier: gpu
+    backend: http://vllm-gpu:8000
+    upstream_model: triage-v1
+    description: "QLoRA triage adapter v1 (clean-data curriculum)"
+
+  slm-triage-v2:
+    tier: gpu
+    backend: http://vllm-gpu:8000
+    upstream_model: triage-v2
+    description: "QLoRA triage adapter v2 (clean + adversarial data)"

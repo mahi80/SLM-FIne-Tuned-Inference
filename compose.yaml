@@ -6,8 +6,12 @@ x-vllm: &vllm
   environment:
     HF_HOME: /root/.cache/huggingface
     HF_TOKEN: ${HF_TOKEN:-}
+    # Allows POST /v1/load_lora_adapter and /v1/unload_lora_adapter at runtime,
+    # so a model release can be promoted or rolled back without a restart.
+    VLLM_ALLOW_RUNTIME_LORA_UPDATING: "1"
   volumes:
     - hf-cache:/root/.cache/huggingface
+    - ./adapters:/adapters:ro
   healthcheck:
     test:
       - CMD
@@ -41,6 +45,13 @@ services:
       - "16"
       - --gpu-memory-utilization
       - "0.85"
+      # Multi-LoRA: adapters are served alongside the base as separate model
+      # names. Rank 16 matches the QLoRA config in finetune/.
+      - --enable-lora
+      - --max-lora-rank
+      - "16"
+      - --max-loras
+      - "4"
       - --host
       - 0.0.0.0
       - --port
@@ -102,6 +113,29 @@ services:
       interval: 10s
       timeout: 3s
       retries: 10
+
+  # One-off QLoRA trainer. Not part of the serving stack: it takes the GPU, so
+  # `make adapter-train` stops the GPU tier first. Run with `--profile train`.
+  train:
+    profiles: ["train"]
+    build:
+      context: .
+      dockerfile: docker/train.Dockerfile
+    restart: "no"
+    environment:
+      HF_HOME: /root/.cache/huggingface
+      HF_TOKEN: ${HF_TOKEN:-}
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+      - ./adapters:/adapters
+      - ./finetune:/app/finetune
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
   prometheus:
     image: prom/prometheus:v3.15.1
