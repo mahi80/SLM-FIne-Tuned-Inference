@@ -21,7 +21,7 @@ Python 3.12, OpenSSL 3.5, `kubectl` for rendering only.
 | A-08 | Tier throughput and latency are measured, not estimated | `make bench` | GPU 125.5 / 484.8 / 1,123.2 output tok/s at c=1/4/12 | Measured |
 | A-09 | CPU and cloud tiers are calibrated simulators | `make bench` | CPU saturates ~122 tok/s; every response `x-simulated: true` | MODELLED |
 | A-10 | Ownership cost is separated from per-token price | `make cost` | $0.117/1M at capacity, $2.24/1M at 20k req/day, break-even ≈ 56k/day | Measured throughput, stated prices |
-| A-11 | Router, eval, cost, deployment and release logic are unit tested | `make test` | 102 tests, 0 failures, stdlib `unittest` | Measured |
+| A-11 | Router, eval, cost, deployment and release logic are unit tested | `make test` | 104 tests, 0 failures, stdlib `unittest` | Measured |
 | A-12 | Three overlays render and pass static checks | `make deploy-validate` | openshift 32, vanilla 25, airgap 31 objects; no errors | Static |
 | A-13 | A signed release matches the deployment tree | `make release-check` | manifest signature verified; policy, images, revision, adapter set and gate all agree | Measured |
 | A-14 | Secrets are not in Git; workloads are non-root with limits and probes | `make deploy-validate`, `tests/test_deploy.py` | no `Secret` objects rendered; 17 deployment tests pass | Static |

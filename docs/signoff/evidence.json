@@ -1,22 +1,22 @@
 {
   "artifacts": {
-    "bench/results/cost-model.json": "5f3f5089fcc8ea8a37d008f70b1c86e1a769147d13ae714fa59ec3a2098d5787",
-    "bench/results/eval-baseline.json": "d345a5eea67a6e2ac5999de147649e706427044a66085e88280078a1e920d1f2",
-    "bench/results/eval-gate.json": "f17246d81c6343e615dfc6e6e8cdfee12a16b102d2817b63cb5f037b4a066d2a",
-    "bench/results/tier-comparison.json": "7a04eb9ab0eff29ce4e8950e053e91eba160a57980a30797c072adcb9af97c80",
+    "bench/results/cost-model.json": "c551e22bdad42f8606c76a3bd9a88345d5e2f19174e5044c5fbe917861ba1423",
+    "bench/results/eval-baseline.json": "a52a9afe3e317c98cddc8319bfe81ffa133c75b156a05465ec0dd39f8d204696",
+    "bench/results/eval-gate.json": "9a4099b63ed005807ef9f5e19963a6bd76718e5663b741e974322e478e413f28",
+    "bench/results/tier-comparison.json": "c76ce75ac07c4ba856a69a4555ff41ea16a8c0e3af15cbc535a7ef146be39e52",
     "compose.yaml": "e1c8212639e6d562fdf42d79b984fae1550a31b3e441ed7f3263447e77df23a7",
     "config/cost.yaml": "fc9bfb7777ae5b703732d9d9954f80d1026fdc1e226166e9104f1d61bc434622",
     "config/eval-gates.yaml": "50fee941f061743c74fd0ae2f8bb0511ee85cbf8f7be69d445ed19321ae2842e",
     "config/policy.yaml": "b0f1fc800bf779e33e2ac63d60b9c1ee213cef3ac88c19f4d5fb43127c1c097c",
     "config/release.yaml": "030627fc35ad742e8115cf019cd577157bea0972414103d35c561f78b7daefbd",
-    "src/eval/golden.jsonl": "747ffd5dab7783db1b0e2c2e880f7ef62fb5594283af09f6d40e8693262d531d"
+    "src/eval/golden.jsonl": "819c526a4406cb3a2a2b820fa535c3f7b8ad84aa10ea780abc3092a857acce39"
   },
   "environment": {
     "openssl": "OpenSSL 3.5.7 9 Jun 2026 (Library: OpenSSL 3.5.7 9 Jun 2026)",
     "platform": "Windows-11-10.0.26200-SP0",
     "python": "3.12.10"
   },
-  "generated_at": "2026-11-04T15:55:59Z",
+  "generated_at": "2026-11-04T17:10:56Z",
   "notes": [
     "Artifacts are hashed as they exist in the working tree at generation time.",
     "The release signature is verified against the committed public key, not a trust root.",
@@ -33,7 +33,7 @@
         "sha256": "a459129539cf1573736a011ae172f6e2e88c24366e597d4c5828ce3ab4fca159"
       }
     ],
-    "canonical_sha256": "7b6dbb774a7008d23698e95688d948c6eddb22fbefb9a492226557e8285e0e76",
+    "canonical_sha256": "3532df1f4d893298632c4e476f22232f4da59663d4fce1782e9effdfede52682",
     "gate": {
       "checks_total": 13,
       "metrics": {
@@ -62,7 +62,7 @@
       "passed": true
     },
     "manifest": "release/slm-0.5.0.json",
-    "manifest_sha256": "0858142b5c9b9c13461b2539469811f9955f6d30e510d9493059a1d2dc82c7e7",
+    "manifest_sha256": "5d4c30fb7ee5e011d25bd056e0cf3b0fb195521358b6762074ae94cc4e0fad19",
     "model": {
       "base_id": "Qwen/Qwen3-4B-Instruct-2507",
       "id": "cyankiwi/Qwen3-4B-Instruct-2507-AWQ-4bit",
@@ -77,14 +77,14 @@
     "signature_verified": true
   },
   "source": {
-    "commit": "d2cf0711d57e2143ff64bd6e137c4e799a12c5a3",
-    "dirty": false
+    "commit": "8f57e5311f98df8217a038aa15cd792ebc3c04e0",
+    "dirty": true
   },
   "tests": {
     "errors": 0,
     "failures": 0,
     "ok": true,
-    "ran": 102,
+    "ran": 104,
     "skipped": 0
   }
 }

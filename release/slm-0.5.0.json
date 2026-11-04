@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "release_id": "slm-0.5.0",
-  "created_at": "2026-11-04T15:55:28Z",
+  "created_at": "2026-11-04T17:10:46Z",
   "source": {
-    "commit": "d2cf0711d57e2143ff64bd6e137c4e799a12c5a3",
+    "commit": "8f57e5311f98df8217a038aa15cd792ebc3c04e0",
     "dirty": false
   },
   "model": {
@@ -96,12 +96,12 @@
   },
   "gate": {
     "report": "bench/results/eval-gate.json",
-    "report_sha256": "f17246d81c6343e615dfc6e6e8cdfee12a16b102d2817b63cb5f037b4a066d2a",
+    "report_sha256": "9a4099b63ed005807ef9f5e19963a6bd76718e5663b741e974322e478e413f28",
     "config": "config/eval-gates.yaml",
     "config_sha256": "50fee941f061743c74fd0ae2f8bb0511ee85cbf8f7be69d445ed19321ae2842e",
     "model": "slm-triage-v2",
     "golden": "src/eval/golden.jsonl",
-    "golden_sha256": "747ffd5dab7783db1b0e2c2e880f7ef62fb5594283af09f6d40e8693262d531d",
+    "golden_sha256": "819c526a4406cb3a2a2b820fa535c3f7b8ad84aa10ea780abc3092a857acce39",
     "n": 24,
     "passed": true,
     "checks_total": 13,
@@ -129,19 +129,19 @@
       }
     },
     "baseline": "bench/results/eval-baseline.json",
-    "baseline_sha256": "d345a5eea67a6e2ac5999de147649e706427044a66085e88280078a1e920d1f2",
+    "baseline_sha256": "a52a9afe3e317c98cddc8319bfe81ffa133c75b156a05465ec0dd39f8d204696",
     "in_cluster_model": "triage-v2"
   },
   "benchmark": {
     "path": "bench/results/tier-comparison.json",
-    "sha256": "7a04eb9ab0eff29ce4e8950e053e91eba160a57980a30797c072adcb9af97c80",
+    "sha256": "c76ce75ac07c4ba856a69a4555ff41ea16a8c0e3af15cbc535a7ef146be39e52",
     "gpu_output_tps_max": 1123.2,
     "gpu_concurrency_at_max": 12,
     "runs": 12
   },
   "cost": {
     "path": "bench/results/cost-model.json",
-    "sha256": "5f3f5089fcc8ea8a37d008f70b1c86e1a769147d13ae714fa59ec3a2098d5787",
+    "sha256": "c551e22bdad42f8606c76a3bd9a88345d5e2f19174e5044c5fbe917861ba1423",
     "requests_per_day": 20000,
     "owned_usd_per_1m_at_workload": 2.2428,
     "break_even_requests_per_day": {
