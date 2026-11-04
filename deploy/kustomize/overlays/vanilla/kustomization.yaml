@@ -1,0 +1,30 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: slm-fabric
+
+# Plain Kubernetes: no OpenShift Route, no ServiceMonitor CRD, no PostSync
+# hooks. Exposure is an Ingress the cluster's ingress controller already knows.
+resources:
+  - ../../base
+  - ingress.yaml
+
+components:
+  - ../../components/model-download
+
+patches:
+  # Vanilla clusters do not assign a UID the way OpenShift's restricted SCC
+  # does. Name one explicitly and hand the volumes to the same group. Without
+  # a concrete UID, runAsNonRoot rejects the upstream vLLM image (USER root).
+  - target:
+      kind: Deployment
+    patch: |-
+      - op: add
+        path: /spec/template/spec/securityContext/runAsUser
+        value: 1001
+      - op: add
+        path: /spec/template/spec/securityContext/fsGroup
+        value: 1001
+      - op: add
+        path: /spec/template/spec/securityContext/fsGroupChangePolicy
+        value: OnRootMismatch

@@ -1,0 +1,40 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: slm-fabric
+
+resources:
+  - ../../base
+  - route.yaml
+  - servicemonitor.yaml
+  - networkpolicy-monitoring.yaml
+
+components:
+  - ../../components/model-download
+  - ../../components/release-gate
+
+patches:
+  # Enable user-workload monitoring for this namespace so the ServiceMonitor
+  # below is picked up. Requires enableUserWorkload: true in cluster-monitoring.
+  - target:
+      kind: Namespace
+      name: slm-fabric
+    patch: |-
+      - op: add
+        path: /metadata/labels/openshift.io~1cluster-monitoring
+        value: "true"
+  # OpenShift DNS runs in openshift-dns, not kube-system. Add it alongside the
+  # Kubernetes rule so the default-deny policy does not break name resolution.
+  - target:
+      kind: NetworkPolicy
+      name: allow-dns-egress
+    patch: |-
+      - op: add
+        path: /spec/egress/0/to/-
+        value:
+          namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-dns
+          podSelector:
+            matchLabels:
+              dns.operator.openshift.io/daemonset-dns: default

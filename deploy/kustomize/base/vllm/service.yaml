@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-gpu
+  labels:
+    app.kubernetes.io/name: vllm-gpu
+    app.kubernetes.io/part-of: slm-fabric
+    slm.fabric/scrape: "true"
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: vllm-gpu
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+      protocol: TCP

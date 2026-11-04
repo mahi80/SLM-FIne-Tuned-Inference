@@ -1,0 +1,21 @@
+# Tag resolution for manifests that reference a tag rather than a digest.
+# IDMS covers the digest path; ITMS covers the tag path when the upstream
+# registry is unreachable.
+apiVersion: config.openshift.io/v1
+kind: ImageTagMirrorSet
+metadata:
+  name: slm-fabric
+spec:
+  imageTagMirrors:
+    - source: docker.io/vllm/vllm-openai
+      mirrors: [mirror.internal.example/vllm/vllm-openai]
+      mirrorSourcePolicy: NeverContactSource
+    - source: docker.io/slm/gateway
+      mirrors: [mirror.internal.example/slm/gateway]
+      mirrorSourcePolicy: NeverContactSource
+    - source: docker.io/slm/tiersim
+      mirrors: [mirror.internal.example/slm/tiersim]
+      mirrorSourcePolicy: NeverContactSource
+    - source: docker.io/slm/eval
+      mirrors: [mirror.internal.example/slm/eval]
+      mirrorSourcePolicy: NeverContactSource

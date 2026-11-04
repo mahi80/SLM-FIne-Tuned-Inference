@@ -1,0 +1,36 @@
+# vLLM is the one exception: CUDA, Triton and inductor write caches outside
+# /tmp at runtime. Giving it a writable layer is a deliberate, documented gap;
+# every other container must treat its image as immutable.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: slm-require-read-only-rootfs
+  labels:
+    app.kubernetes.io/part-of: slm-fabric
+spec:
+  validationFailureAction: Enforce
+  background: false
+  rules:
+    - name: read-only-root-filesystem
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [slm-fabric]
+      exclude:
+        any:
+          - resources:
+              selector:
+                matchLabels:
+                  app.kubernetes.io/name: vllm-gpu
+      validate:
+        message: "Containers must set readOnlyRootFilesystem: true (vLLM is exempt)."
+        foreach:
+          - list: "request.object.spec.containers"
+            pattern:
+              securityContext:
+                readOnlyRootFilesystem: true
+          - list: "request.object.spec.initContainers || []"
+            pattern:
+              securityContext:
+                readOnlyRootFilesystem: true

@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: tiersim-cloud
+  labels:
+    app.kubernetes.io/name: tiersim-cloud
+    app.kubernetes.io/part-of: slm-fabric
+    slm.fabric/scrape: "true"
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: tiersim-cloud
+  ports:
+    - name: http
+      port: 8001
+      targetPort: http
+      protocol: TCP

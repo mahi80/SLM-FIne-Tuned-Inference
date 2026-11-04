@@ -1,0 +1,58 @@
+# Requests and limits keep one tenant's burst from starving the GPU tier's
+# control path. GPUs are checked separately because requests must equal limits.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: slm-require-resources
+  labels:
+    app.kubernetes.io/part-of: slm-fabric
+spec:
+  validationFailureAction: Enforce
+  background: false
+  rules:
+    - name: cpu-and-memory
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [slm-fabric]
+      validate:
+        message: "Every container needs CPU and memory requests and limits."
+        foreach:
+          - list: "request.object.spec.containers"
+            pattern:
+              resources:
+                requests:
+                  cpu: "?*"
+                  memory: "?*"
+                limits:
+                  cpu: "?*"
+                  memory: "?*"
+          - list: "request.object.spec.initContainers || []"
+            pattern:
+              resources:
+                requests:
+                  cpu: "?*"
+                  memory: "?*"
+                limits:
+                  cpu: "?*"
+                  memory: "?*"
+    - name: gpu-limits
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [slm-fabric]
+              selector:
+                matchLabels:
+                  slm.fabric/tier: gpu
+      validate:
+        message: "GPU pods must request and limit nvidia.com/gpu explicitly."
+        foreach:
+          - list: "request.object.spec.containers"
+            pattern:
+              resources:
+                requests:
+                  nvidia.com/gpu: "?*"
+                limits:
+                  nvidia.com/gpu: "?*"

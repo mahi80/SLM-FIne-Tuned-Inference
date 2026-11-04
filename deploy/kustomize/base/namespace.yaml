@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: slm-fabric
+  labels:
+    app.kubernetes.io/part-of: slm-fabric
+    # Enforced, not advisory: every workload in this namespace must satisfy the
+    # restricted Pod Security Standard. The vLLM container is the only one that
+    # keeps a writable root filesystem, and that is allowed by restricted.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"

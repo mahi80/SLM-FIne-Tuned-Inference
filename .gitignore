@@ -7,5 +7,8 @@ __pycache__/
 .DS_Store
 *.log
 
+# Rendered Kustomize output is a build artifact.
+deploy/rendered/
+
 # Trained adapter weights are artifacts, not source. Reproduce with `make adapter-train`.
 adapters/*/

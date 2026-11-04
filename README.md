@@ -3,10 +3,11 @@
 Private, provider-agnostic serving for fine-tuned small language models — a runnable
 reference platform, not a slide deck.
 
-**Status:** Phase 4 of 6 — GPU tier, gateway, simulated CPU and cloud tiers, observability,
+**Status:** Phase 5 of 6 — GPU tier, gateway, simulated CPU and cloud tiers, observability,
 two QLoRA adapters, a policy-driven router with canary, breakers and a hash-chained audit
-trail, plus a benchmark harness, a golden-set release gate and an ownership cost model are
-live and measured.
+trail, a benchmark harness, a golden-set release gate and an ownership cost model are live
+and measured. The same stack now ships as Kustomize overlays for OpenShift, vanilla
+Kubernetes and air-gapped installs, reconciled by Argo CD and enforced by Kyverno.
 
 ---
 
@@ -47,8 +48,9 @@ the distinction explicit:
 | Observability (Prometheus + provisioned Grafana) | **Measured** | dashboard `slm-platform`, 7 panels |
 | CPU tier (OpenVINO / llama.cpp on Xeon/EPYC) | **Modelled** — calibrated simulator, no Xeon on this laptop | `src/tiersim`, labelled `x-simulated: true` |
 | Cloud burst tier (L4 profile) | **Modelled and wired** — a standby that residency usually excludes | `tiersim-cloud`, `x-simulated: true` |
-| OpenShift / air-gapped deployment | **Static validation** — manifests render and pass policy checks; no cluster available | `deploy/openshift` |
-| Governance, signed releases, GitOps, sign-off pack | Planned (Phases 5–6) | — |
+| OpenShift / vanilla / air-gap deployment | **Static validation** — three overlays render and pass policy checks; no cluster available | `deploy/kustomize`, `make deploy-validate` |
+| GitOps, release hooks and admission policy | **Static validation** — Argo CD app-of-apps, Kyverno ClusterPolicies, PostSync eval gate | `deploy/gitops`, `deploy/policies` |
+| Signed model releases, C4 diagrams and sign-off pack | Planned (Phase 6) | — |
 
 Numbers from a simulated tier are labelled `MODELLED` everywhere they appear.
 
@@ -89,7 +91,7 @@ make up            # build, pull, download weights, wait until every service is 
 make smoke         # GPU tier directly
 make smoke-gateway # all tiers through the gateway
 make smoke-policy  # admission, residency veto, canary stability, audit chain
-make test          # router, eval and cost unit tests (stdlib unittest)
+make test          # router, eval, cost and deployment unit tests (stdlib unittest)
 make adapter-train # QLoRA adapters v1/v2, then hot-load them (takes the GPU ~25 min)
 make adapter-smoke # adapter aliases end to end through the gateway
 make adapter-eval  # base vs v1 vs v2 on the held-out triage set
@@ -126,6 +128,73 @@ swap weights without touching application code.
 
 Host ports are configurable in `.env`; 8000 is deliberately avoided because it is commonly
 already taken on developer machines.
+
+---
+
+## Kubernetes and OpenShift
+
+The compose stack is the developer loop. The cluster path keeps the same
+`config/policy.yaml` and the same Service names, so a routing rule tested locally resolves
+to a real Service after deployment — and the validator fails the build if it does not.
+
+```bash
+make deploy-images   # build slm/gateway, slm/tiersim and slm/eval, then push to your registry
+make deploy-validate # render all three overlays and check the invariants (no cluster needed)
+make deploy-render   # write deploy/rendered/{openshift,vanilla,airgap}.yaml
+make deploy-secret   # create slm-tenants from the gitignored config/tenants.yaml
+```
+
+| Overlay | What it adds | Target |
+|---|---|---|
+| `openshift` | Route with edge TLS and a 300s timeout, ServiceMonitor, monitoring scrape policy, release hooks | Reference substrate |
+| `vanilla` | nginx Ingress, explicit UID/fsGroup 1001, no hooks | EKS / AKS / GKE / kind |
+| `airgap` | OpenShift shape plus offline Hugging Face env and no model-download egress | Disconnected site |
+
+The manifests name `docker.io/slm/*`; retag or mirror them into the registry your cluster
+pulls from. Then reconcile with Argo CD:
+
+```bash
+kubectl apply -f deploy/gitops/argocd/project.yaml
+kubectl apply -f deploy/gitops/argocd/app-of-apps.yaml
+```
+
+Prerequisites are Argo CD, Kyverno, the NVIDIA GPU Operator and either Prometheus Operator
+or OpenShift user-workload monitoring. Seed the `slm-adapters` PVC from `make adapter-train`
+before the first sync; the loader hook declares `triage-v1`/`triage-v2` and fails the sync
+if either is absent. The root app syncs admission policy (`slm-policies`, wave 0) before
+the platform (`slm-platform`, wave 10); the platform's PostSync hooks then load the
+adapters into vLLM and run the golden-set gate against the served adapter. A failed gate
+leaves the application failed and un-promoted.
+
+```text
+$ python tools/validate_deploy.py
+OK   openshift: 32 objects
+OK   vanilla: 25 objects
+OK   airgap: 31 objects
+```
+
+The validator is the review artifact. It re-renders the overlays and checks:
+
+- every candidate URL in `config/policy.yaml` resolves to a Service and port in the
+  rendered set, and the policy ConfigMap is identical to the file on disk;
+- the vLLM image and model revision are the Phase 0 pins, and multi-LoRA is enabled;
+- restricted security contexts, resource requests/limits and readiness probes on every
+  workload, with vLLM the single documented exception to a read-only root filesystem;
+- no Secret material, no host namespaces, no `latest` tags, and a single `Recreate`
+  gateway because quota, breaker and audit state are in-process;
+- the overlay actually exposes what it claims: a Route or Ingress for the gateway, a
+  ServiceMonitor and scrape policy on OpenShift, offline env in the air gap.
+
+**Air gap.** Mirror the images with `deploy/openshift/airgap/mirror.sh`, apply the
+cluster-scoped `IDMS`/`ITMS` objects with `kubectl apply -k deploy/openshift/airgap`, point
+`deploy/gitops/apps/platform.yaml` at `overlays/airgap`, and seed `slm-model-cache` from the
+mirrored weights before first start. The application manifests do not change.
+
+**Limits, stated.** There is no cluster in this environment, so this is static validation:
+Kustomize rendering plus assertions, not an applied cluster and not a live Kyverno
+admission. Images are pinned by tag rather than digest (production should rewrite them at
+promotion), PVCs rely on the cluster default storage class, and the gateway is deliberately
+one replica. The full rationale is in [ADR-0006](docs/adr/ADR-0006-deployment-gitops.md).
 
 ---
 
@@ -546,8 +615,8 @@ scripts/smoke_gateway.py         end-to-end test through the gateway, all tiers
 scripts/smoke_policy.py          admission, residency, canary stability, audit chain
 scripts/smoke_adapters.py        adapter aliases and contract check through the gateway
 scripts/load_adapters.py         runtime load of every adapter into vLLM
-tests/                           router, eval and cost unit tests (stdlib unittest)
-docker/                          gateway, simulator and QLoRA training images
+tests/                           router, eval, cost and deployment unit tests (stdlib unittest)
+docker/                          gateway, simulator, QLoRA training and eval images
 src/gateway/                     OpenAI-compatible API, auth, quotas, proxy, policy use, audit
 src/router/                      policy model, admission, canary, breakers, hash-chained audit
 src/tiersim/                     calibrated CPU / cloud tier simulator
@@ -556,10 +625,11 @@ src/bench/                       closed-loop load generator and report rendering
 src/eval/                        golden-set scoring, floors and drift gate
 src/cost/                        ownership TCO, utilisation sweep and break-even
 deploy/observability/grafana/    provisioned datasource and dashboard
-deploy/openshift/                SCC, Route, ImageStream, GPU Operator, IDMS/ITMS
-deploy/kustomize/                overlays: openshift, vanilla k8s, airgap
-deploy/policies/                 Kyverno / Gatekeeper admission policy
-deploy/gitops/                   Argo CD app-of-apps, Rollouts analysis
+deploy/kustomize/                base, openshift/vanilla/airgap overlays, shared components
+deploy/openshift/airgap/         IDMS/ITMS, mirrored image list and mirror script
+deploy/policies/                 Kyverno ClusterPolicies enforced at admission
+deploy/gitops/                   Argo CD project, app-of-apps and child Applications
+tools/validate_deploy.py         static checks over the rendered overlays
 finetune/prompt.py               task contract: system prompt, schema, taxonomy
 finetune/dataset.py              deterministic triage dataset generator
 finetune/train_qlora.py          QLoRA trainer (4-bit NF4, assistant-only loss)
@@ -685,6 +755,32 @@ prefill/decode ratio borrowed from the benchmark prompt: each is a stated limita
 silent assumption. Phase 5 can replace the arrival model and the hardware profile without
 changing the commands.
 
+### Phase 5
+
+**Service names are part of the API.** `config/policy.yaml` routes to hostnames. Naming the
+Kubernetes Services `vllm-gpu`, `tiersim-cpu` and `tiersim-cloud` means the tested policy is
+the deployed policy, and the validator enforces the correspondence instead of trusting it.
+
+**One writer, stated as a correctness constraint.** The gateway is `replicas: 1` with a
+`Recreate` strategy because quotas, breakers and the audit chain are in-process. A rolling
+update or a second replica would be a data-integrity bug. Model canaries stay in the
+policy, where they are per-tenant and stateless.
+
+**Security is enforced twice, and the exception is named.** Restricted Pod Security labels
+and Kyverno policies both reject non-root, privilege escalation, added capabilities, missing
+resources and host namespaces. vLLM is the single allowed writable root filesystem because
+CUDA/Triton caches write outside `/tmp`; recording that exception is better than weakening
+the policy for every workload.
+
+**Air gap is a mirror, not a fork.** IDMS/ITMS redirect pulls cluster-wide, `images.txt` is
+the auditable list of what must be mirrored, and the application overlay differs only in
+offline env and a deleted egress rule. One manifest set, two connectivity assumptions.
+
+**The deployment is tested like the code.** Seventeen tests cover the failure modes that
+matter — untagged images, privileged pods, GPU request/limit drift, a policy URL with no
+Service, a stale policy ConfigMap, an extra gateway replica — and the integration tests
+render all three overlays. The checks run without a cluster; that is also their limit.
+
 ---
 
 ## Roadmap
@@ -696,8 +792,8 @@ changing the commands.
 | 2 | QLoRA adapters v1/v2, multi-LoRA hot loading | **Done** |
 | 3 | Router policy engine, canary, audit trail | **Done** |
 | 4 | Benchmarks, golden-set eval gate, ownership cost model | **Done** |
-| 5 | OpenShift / air-gap manifests, GitOps, admission policy | Next |
-| 6 | C4 diagrams, signed releases, architecture sign-off pack | |
+| 5 | OpenShift / vanilla / air-gap manifests, GitOps, admission policy | **Done** |
+| 6 | C4 diagrams, signed releases, architecture sign-off pack | Next |
 
 ---
 

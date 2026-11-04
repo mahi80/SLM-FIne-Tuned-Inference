@@ -1,0 +1,25 @@
+# Cluster-scoped mirror configuration. Applied once by the platform team, not
+# by the application sync: it changes how every image pull on the cluster is
+# resolved, so it does not belong in a namespace-scoped Application.
+#
+# Replace mirror.internal.example with the internal registry and keep the
+# repository path: a mirror entry replaces the whole repository, so each source
+# needs its own entry.
+apiVersion: config.openshift.io/v1
+kind: ImageDigestMirrorSet
+metadata:
+  name: slm-fabric
+spec:
+  imageDigestMirrors:
+    - source: docker.io/vllm/vllm-openai
+      mirrors: [mirror.internal.example/vllm/vllm-openai]
+      mirrorSourcePolicy: NeverContactSource
+    - source: docker.io/slm/gateway
+      mirrors: [mirror.internal.example/slm/gateway]
+      mirrorSourcePolicy: NeverContactSource
+    - source: docker.io/slm/tiersim
+      mirrors: [mirror.internal.example/slm/tiersim]
+      mirrorSourcePolicy: NeverContactSource
+    - source: docker.io/slm/eval
+      mirrors: [mirror.internal.example/slm/eval]
+      mirrorSourcePolicy: NeverContactSource

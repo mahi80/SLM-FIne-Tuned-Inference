@@ -1,0 +1,168 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-gpu
+  labels:
+    app.kubernetes.io/name: vllm-gpu
+    app.kubernetes.io/component: gpu-tier
+    app.kubernetes.io/part-of: slm-fabric
+    slm.fabric/tier: gpu
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  replicas: 1
+  # One GPU, one model copy: a surge pod would need a second GPU and would
+  # halve KV-cache headroom. Downtime is covered at the router, not here.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vllm-gpu
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vllm-gpu
+        app.kubernetes.io/component: gpu-tier
+        app.kubernetes.io/part-of: slm-fabric
+        slm.fabric/tier: gpu
+      annotations:
+        # Record what was actually served. A node is an artifact, not a tag.
+        slm.fabric/model: cyankiwi/Qwen3-4B-Instruct-2507-AWQ-4bit
+        slm.fabric/model-revision: b37d1ccb77e27a70fe4222d995fda27940eead5a
+        slm.fabric/served-model: slm-small
+    spec:
+      serviceAccountName: slm-vllm
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      # Set by the NVIDIA GPU Operator on GPU nodes.
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai
+          imagePullPolicy: IfNotPresent
+          args:
+            - cyankiwi/Qwen3-4B-Instruct-2507-AWQ-4bit
+            - --revision
+            - b37d1ccb77e27a70fe4222d995fda27940eead5a
+            - --served-model-name
+            - slm-small
+            - --dtype
+            - float16
+            - --max-model-len
+            - "8192"
+            - --max-num-seqs
+            - "16"
+            - --gpu-memory-utilization
+            - "0.85"
+            # Rank 16 matches the QLoRA config. Four slots leave room for a
+            # canary adapter next to the primary during a promotion.
+            - --enable-lora
+            - --max-lora-rank
+            - "16"
+            - --max-loras
+            - "4"
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8000"
+          env:
+            - name: HF_HOME
+              value: /models/hf
+            # OpenShift's restricted SCC and the vanilla overlay both run this
+            # image as a non-root UID. The image's default HOME is /root, which
+            # that UID cannot write, so every runtime cache is redirected into
+            # the writable /tmp emptyDir.
+            - name: HOME
+              value: /tmp
+            - name: XDG_CACHE_HOME
+              value: /tmp/.cache
+            - name: VLLM_CACHE_ROOT
+              value: /tmp/vllm
+            - name: TRITON_CACHE_DIR
+              value: /tmp/triton
+            - name: TORCHINDUCTOR_CACHE_DIR
+              value: /tmp/torchinductor
+            - name: VLLM_ALLOW_RUNTIME_LORA_UPDATING
+              value: "1"
+            # Optional: a connected install needs a token for the pinned
+            # revision. Air-gapped installs seed the claim and never read it.
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: slm-hf-token
+                  key: token
+                  optional: true
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          resources:
+            requests:
+              cpu: "4"
+              memory: 16Gi
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "8"
+              memory: 24Gi
+              # Requests equal limits: GPUs are not compressible.
+              nvidia.com/gpu: "1"
+          # A cold start downloads the model, warms CUDA graphs and compiles
+          # kernels. Fifteen minutes is generous on purpose.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 90
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: model-cache
+              mountPath: /models/hf
+            - name: adapters
+              mountPath: /adapters
+              readOnly: true
+            # vLLM uses shared memory for tensor parallel and a writable /tmp
+            # for Triton/inductor caches.
+            - name: dshm
+              mountPath: /dev/shm
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: slm-model-cache
+        - name: adapters
+          persistentVolumeClaim:
+            claimName: slm-adapters
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 2Gi
+        - name: tmp
+          emptyDir: {}

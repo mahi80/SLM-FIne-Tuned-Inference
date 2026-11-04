@@ -1,0 +1,33 @@
+# Model weights live on a persistent claim, not in the image. In an air-gapped
+# install this claim is seeded once from the mirrored artifact; on a connected
+# install vLLM populates it from the pinned Hugging Face revision on first start.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: slm-model-cache
+  labels:
+    app.kubernetes.io/name: vllm-gpu
+    app.kubernetes.io/part-of: slm-fabric
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 40Gi
+---
+# QLoRA adapter weights, written by the training job and read by vLLM.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: slm-adapters
+  labels:
+    app.kubernetes.io/name: vllm-gpu
+    app.kubernetes.io/part-of: slm-fabric
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 10Gi

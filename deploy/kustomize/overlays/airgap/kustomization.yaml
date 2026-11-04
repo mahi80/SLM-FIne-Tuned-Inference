@@ -1,0 +1,50 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Air-gapped installs keep the OpenShift shape and remove the two things that
+# assume connectivity: the model-download egress rule and online model lookup.
+# Weights are seeded into slm-model-cache from the mirrored artifact; the
+# cluster-level mirror configuration lives in deploy/openshift/airgap/.
+resources:
+  - ../openshift
+
+patches:
+  - target:
+      kind: NetworkPolicy
+      name: allow-vllm-model-download
+    patch: |-
+      $patch: delete
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: allow-vllm-model-download
+
+  - target:
+      kind: Deployment
+      name: vllm-gpu
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: HF_HUB_OFFLINE
+          value: "1"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: TRANSFORMERS_OFFLINE
+          value: "1"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: HF_HUB_DISABLE_TELEMETRY
+          value: "1"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: VLLM_NO_USAGE_STATS
+          value: "1"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: DO_NOT_TRACK
+          value: "1"

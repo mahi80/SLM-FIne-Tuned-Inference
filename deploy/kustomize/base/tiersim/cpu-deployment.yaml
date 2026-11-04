@@ -1,0 +1,82 @@
+# Simulated CPU tier. The timing profile is the product: it makes queueing,
+# failover and cost visible before a CPU node exists. Every response is tagged
+# x-simulated: true so benchmarks never mistake it for measured GPU capacity.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tiersim-cpu
+  labels:
+    app.kubernetes.io/name: tiersim-cpu
+    app.kubernetes.io/component: cpu-tier
+    app.kubernetes.io/part-of: slm-fabric
+    slm.fabric/tier: cpu
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tiersim-cpu
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: tiersim-cpu
+        app.kubernetes.io/component: cpu-tier
+        app.kubernetes.io/part-of: slm-fabric
+        slm.fabric/tier: cpu
+    spec:
+      serviceAccountName: slm-tiersim
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: tiersim
+          image: slm/tiersim
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: TIERSIM_PROFILE
+              value: cpu-xeon-4b
+            - name: TIERSIM_MODEL_NAME
+              value: slm-small
+            - name: TIERSIM_SPEEDUP
+              value: "1"
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+          ports:
+            - name: http
+              containerPort: 8001
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

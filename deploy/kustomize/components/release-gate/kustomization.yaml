@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+# Two PostSync hooks run on every platform sync, in weight order:
+#
+#   -5  adapter-loader  promote triage-v1/v2 into the running vLLM
+#    5  release-gate    score triage-v2 against the golden set and fail the
+#                       sync if the floors in config/eval-gates.yaml are missed
+#
+# The gate runs against vLLM directly, not the gateway: it measures the model,
+# not the router, and needs no tenant credential. Model promotion through the
+# gateway is controlled separately by the canary percentage in policy.yaml.
+resources:
+  - adapter-loader.yaml
+  - release-gate-job.yaml
+  - networkpolicy.yaml
+
+images:
+  - name: slm/eval
+    newTag: "0.5.0"
+  # The adapter loader reuses the gateway image for its stdlib-only client.
+  - name: slm/gateway
+    newTag: "0.5.0"

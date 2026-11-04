@@ -1,0 +1,39 @@
+# App-of-apps root. Apply this once; everything else is reconciled from Git.
+#
+#   kubectl apply -f deploy/gitops/argocd/project.yaml
+#   kubectl apply -f deploy/gitops/argocd/app-of-apps.yaml
+#
+# The child Applications live in deploy/gitops/apps and are ordered by
+# argocd.argoproj.io/sync-wave: policies (0) before platform (10).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: slm-fabric-root
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: slm-fabric
+  source:
+    repoURL: https://github.com/mahi80/SLM-FIne-Tuned-Inference.git
+    # Git is the source of truth for deployment state. Images and the model
+    # revision are pinned separately; this ref only tracks manifests.
+    targetRevision: main
+    path: deploy/gitops/apps
+    directory:
+      recurse: false
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - PrunePropagationPolicy=foreground
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 5m

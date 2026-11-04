@@ -1,0 +1,27 @@
+# Edge TLS termination at the OpenShift router. The gateway is the only
+# component exposed outside the cluster; vLLM and the simulators stay ClusterIP.
+#
+# The timeout is raised because completions stream for minutes, not seconds.
+# The default 30s router timeout truncates long generations mid-stream.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: slm-gateway
+  labels:
+    app.kubernetes.io/name: gateway
+    app.kubernetes.io/part-of: slm-fabric
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+    haproxy.router.openshift.io/timeout: 300s
+    haproxy.router.openshift.io/disable_cookies: "true"
+spec:
+  to:
+    kind: Service
+    name: gateway
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None

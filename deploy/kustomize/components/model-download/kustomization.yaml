@@ -1,0 +1,8 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+# Connected installs only: allow vLLM to pull the pinned model revision from
+# Hugging Face. The air-gap overlay inherits the OpenShift overlay and deletes
+# this policy, because the model cache is seeded from the mirror instead.
+resources:
+  - networkpolicy.yaml

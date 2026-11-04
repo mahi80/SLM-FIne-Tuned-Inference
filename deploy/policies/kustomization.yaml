@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - require-pinned-images.yaml
+  - require-pod-security.yaml
+  - require-read-only-rootfs.yaml
+  - require-resources.yaml
+  - require-probes.yaml
+  - disallow-host-access.yaml
+
+labels:
+  - pairs:
+      app.kubernetes.io/managed-by: argocd
+    includeSelectors: false

@@ -1,0 +1,105 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  labels:
+    app.kubernetes.io/name: gateway
+    app.kubernetes.io/component: control-plane
+    app.kubernetes.io/part-of: slm-fabric
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+spec:
+  # Exactly one, deliberately. Rate-limit counters, circuit-breaker state and
+  # the audit chain are in-process. A second replica would partition tenant
+  # quotas and interleave two writers into one audit file. Scaling out requires
+  # moving that state to Redis/Postgres first (see ADR-0006).
+  replicas: 1
+  strategy:
+    type: Recreate
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gateway
+        app.kubernetes.io/component: control-plane
+        app.kubernetes.io/part-of: slm-fabric
+    spec:
+      serviceAccountName: slm-gateway
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: gateway
+          image: slm/gateway
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: POLICY_FILE
+              value: /app/config/policy.yaml
+            - name: TENANTS_FILE
+              value: /app/config/tenants.yaml
+            - name: AUDIT_FILE
+              value: /var/lib/slm/audit.jsonl
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            # policy.yaml is generated from config/policy.yaml; the hash suffix
+            # changes the pod template, so a policy edit rolls the gateway.
+            - name: policy
+              mountPath: /app/config
+            # Tenant keys are not in Git. The Secret is created out of band.
+            - name: tenants
+              mountPath: /app/config/tenants.yaml
+              subPath: tenants.yaml
+              readOnly: true
+            - name: audit
+              mountPath: /var/lib/slm
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: policy
+          configMap:
+            name: slm-policy
+        - name: tenants
+          secret:
+            secretName: slm-tenants
+            optional: false
+        - name: audit
+          persistentVolumeClaim:
+            claimName: slm-gateway-audit
+        - name: tmp
+          emptyDir: {}

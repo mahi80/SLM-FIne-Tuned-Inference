@@ -1,0 +1,32 @@
+# Readiness probes are what keep a cold vLLM pod out of the gateway's backend
+# set. One-shot jobs have an exit code instead.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: slm-require-probes
+  labels:
+    app.kubernetes.io/part-of: slm-fabric
+spec:
+  validationFailureAction: Enforce
+  background: false
+  rules:
+    - name: readiness-probe
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [slm-fabric]
+      exclude:
+        any:
+          - resources:
+              selector:
+                matchLabels:
+                  slm.fabric/role: ops-job
+      validate:
+        message: "Every long-running container needs a readiness probe."
+        foreach:
+          - list: "request.object.spec.containers"
+            pattern:
+              readinessProbe:
+                httpGet:
+                  path: "?*"

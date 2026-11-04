@@ -1,0 +1,43 @@
+# A tagless or :latest image is not a reproducible release. The validator
+# checks rendered manifests in CI; this policy closes the gap for anything
+# applied to the namespace by hand.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: slm-require-pinned-images
+  labels:
+    app.kubernetes.io/part-of: slm-fabric
+spec:
+  validationFailureAction: Enforce
+  background: false
+  rules:
+    - name: reject-latest-tag
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [slm-fabric]
+      validate:
+        message: "Images must be pinned to a tag or digest; ':latest' is not a release."
+        foreach:
+          - list: "request.object.spec.containers"
+            pattern:
+              image: "!*:latest"
+          - list: "request.object.spec.initContainers || []"
+            pattern:
+              image: "!*:latest"
+    - name: require-tag-or-digest
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [slm-fabric]
+      validate:
+        message: "Images must name a tag or a sha256 digest."
+        foreach:
+          - list: "request.object.spec.containers"
+            pattern:
+              image: "*:*"
+          - list: "request.object.spec.initContainers || []"
+            pattern:
+              image: "*:*"

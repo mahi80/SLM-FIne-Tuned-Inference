@@ -1,0 +1,30 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: slm-disallow-host-access
+  labels:
+    app.kubernetes.io/part-of: slm-fabric
+spec:
+  validationFailureAction: Enforce
+  background: false
+  rules:
+    - name: deny-host-namespaces
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [slm-fabric]
+      validate:
+        message: "Pods may not join the host network, PID or IPC namespaces."
+        deny:
+          conditions:
+            any:
+              - key: "{{ request.object.spec.hostNetwork || false }}"
+                operator: Equals
+                value: true
+              - key: "{{ request.object.spec.hostPID || false }}"
+                operator: Equals
+                value: true
+              - key: "{{ request.object.spec.hostIPC || false }}"
+                operator: Equals
+                value: true

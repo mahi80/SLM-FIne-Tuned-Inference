@@ -1,0 +1,82 @@
+# Modelled cloud standby. Residency admission is what makes this tier visible:
+# it exists, it is cheaper, and EU-confidential tenants are still not allowed
+# to reach us-east.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tiersim-cloud
+  labels:
+    app.kubernetes.io/name: tiersim-cloud
+    app.kubernetes.io/component: cloud-tier
+    app.kubernetes.io/part-of: slm-fabric
+    slm.fabric/tier: cloud
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tiersim-cloud
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: tiersim-cloud
+        app.kubernetes.io/component: cloud-tier
+        app.kubernetes.io/part-of: slm-fabric
+        slm.fabric/tier: cloud
+    spec:
+      serviceAccountName: slm-tiersim
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: tiersim
+          image: slm/tiersim
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: TIERSIM_PROFILE
+              value: gpu-l4-4b
+            - name: TIERSIM_MODEL_NAME
+              value: slm-small
+            - name: TIERSIM_SPEEDUP
+              value: "1"
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+          ports:
+            - name: http
+              containerPort: 8001
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

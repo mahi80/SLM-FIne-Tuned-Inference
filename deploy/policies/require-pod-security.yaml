@@ -1,0 +1,48 @@
+# The restricted Pod Security Standard, enforced at admission as well as by the
+# namespace label. The namespace label is the coarse gate; this policy gives a
+# specific message and also covers the container-level fields that PSS checks.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: slm-require-pod-security
+  labels:
+    app.kubernetes.io/part-of: slm-fabric
+spec:
+  validationFailureAction: Enforce
+  background: false
+  rules:
+    - name: pod-security-context
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [slm-fabric]
+      validate:
+        message: "Pods must set runAsNonRoot and seccompProfile RuntimeDefault."
+        pattern:
+          spec:
+            securityContext:
+              runAsNonRoot: true
+              seccompProfile:
+                type: RuntimeDefault
+    - name: container-security-context
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [slm-fabric]
+      validate:
+        message: "Containers must not escalate privileges and must drop ALL capabilities."
+        foreach:
+          - list: "request.object.spec.containers"
+            pattern:
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: [ALL]
+          - list: "request.object.spec.initContainers || []"
+            pattern:
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: [ALL]

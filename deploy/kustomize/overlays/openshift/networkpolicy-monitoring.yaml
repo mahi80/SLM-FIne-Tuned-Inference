@@ -1,0 +1,27 @@
+# The default-deny policy only lets the gateway reach the backends. Prometheus
+# runs in openshift-monitoring, so scraping vLLM and the simulators needs an
+# explicit exception. It is scoped to the port each service exposes.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-monitoring-scrape
+  labels:
+    app.kubernetes.io/part-of: slm-fabric
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+spec:
+  podSelector:
+    matchExpressions:
+      - key: slm.fabric/scrape
+        operator: Exists
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-monitoring
+      ports:
+        - protocol: TCP
+          port: 8000
+        - protocol: TCP
+          port: 8001

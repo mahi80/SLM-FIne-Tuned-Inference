@@ -5,7 +5,8 @@ DC := docker compose
 
 .PHONY: help env gpu-check build up down logs ps test smoke smoke-gateway smoke-policy metrics health health-gateway clean \
         adapter-data adapter-train adapters adapter-eval adapter-smoke \
-        bench eval-baseline eval-gate cost
+        bench eval-baseline eval-gate cost \
+        deploy-images deploy-render deploy-validate deploy-secret
 
 help: ## Show available targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -42,7 +43,7 @@ smoke-gateway: ## Smoke-test all tiers through the gateway
 smoke-policy: ## Check admission, canary stability and the audit chain
 	@python scripts/smoke_policy.py
 
-test: ## Run the router, eval and cost unit tests
+test: ## Run the router, eval, cost and deployment unit tests
 	PYTHONPATH=src python -m unittest discover -s tests -v
 
 bench: ## Run the tier benchmark matrix (writes bench/results)
@@ -60,6 +61,29 @@ eval-gate: ## Score the candidate and enforce floors plus drift
 
 cost: ## Compute ownership cost per million output tokens
 	PYTHONPATH=src python -m cost
+
+deploy-images: ## Build the images the cluster manifests reference
+	docker build -f docker/gateway.Dockerfile -t slm/gateway:0.5.0 .
+	docker build -f docker/tiersim.Dockerfile -t slm/tiersim:0.5.0 .
+	docker build -f docker/eval.Dockerfile -t slm/eval:0.5.0 .
+
+deploy-render: ## Render the three Kustomize overlays into deploy/rendered/
+	@mkdir -p deploy/rendered
+	@for overlay in openshift vanilla airgap; do \
+		kubectl kustomize --load-restrictor LoadRestrictionsNone \
+			deploy/kustomize/overlays/$$overlay > deploy/rendered/$$overlay.yaml; \
+		echo "rendered deploy/rendered/$$overlay.yaml"; \
+	done
+
+deploy-validate: ## Check images, security, resources and policy wiring in the rendered manifests
+	python tools/validate_deploy.py
+
+deploy-secret: ## Create the tenant Secret from the gitignored local file
+	@test -f config/tenants.yaml || (echo "config/tenants.yaml missing: run 'make env'"; exit 1)
+	@kubectl get namespace slm-fabric >/dev/null 2>&1 || kubectl create namespace slm-fabric
+	kubectl -n slm-fabric create secret generic slm-tenants \
+		--from-file=tenants.yaml=config/tenants.yaml \
+		--dry-run=client -o yaml | kubectl apply -f -
 
 metrics: ## Print a sample of gateway metrics
 	@curl -s http://localhost:8020/metrics | grep -E '^gateway_' | head -20

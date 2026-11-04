@@ -1,0 +1,22 @@
+# One monitor for all four tiers: every Service carries slm.fabric/scrape=true
+# and names its port "http". Prometheus Operator discovers this object through
+# the namespace's openshift.io/cluster-monitoring label.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: slm-fabric
+  labels:
+    app.kubernetes.io/part-of: slm-fabric
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+spec:
+  namespaceSelector:
+    matchNames: [slm-fabric]
+  selector:
+    matchLabels:
+      slm.fabric/scrape: "true"
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s
