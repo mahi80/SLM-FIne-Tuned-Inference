@@ -7,7 +7,7 @@ the design; they are limits of the environment the design was built in.
 ## Verified in this environment
 
 Host: RTX 4080 Laptop 12 GiB, Docker 29.4, vLLM v0.33.0, Windows 11 + Git Bash,
-Python 3.12, OpenSSL 3.5, `kubectl` for rendering only.
+Python 3.12, OpenSSL 3.5, `kubectl` v1.34.1, kind v0.33.0 on Docker Desktop.
 
 | # | Claim | Command | Observed | Class |
 |---|---|---|---|---|
@@ -21,12 +21,17 @@ Python 3.12, OpenSSL 3.5, `kubectl` for rendering only.
 | A-08 | Tier throughput and latency are measured, not estimated | `make bench` | GPU 125.5 / 484.8 / 1,123.2 output tok/s at c=1/4/12 | Measured |
 | A-09 | CPU and cloud tiers are calibrated simulators | `make bench` | CPU saturates ~122 tok/s; every response `x-simulated: true` | MODELLED |
 | A-10 | Ownership cost is separated from per-token price | `make cost` | $0.117/1M at capacity, $2.24/1M at 20k req/day, break-even ≈ 56k/day | Measured throughput, stated prices |
-| A-11 | Router, eval, cost, deployment and release logic are unit tested | `make test` | 104 tests, 0 failures, stdlib `unittest` | Measured |
+| A-11 | Router, eval, cost, deployment and release logic are unit tested | `make test` | 106 tests, 0 failures, stdlib `unittest` | Measured |
 | A-12 | Three overlays render and pass static checks | `make deploy-validate` | openshift 32, vanilla 25, airgap 31 objects; no errors | Static |
 | A-13 | A signed release matches the deployment tree | `make release-check` | manifest signature verified; policy, images, revision, adapter set and gate all agree | Measured |
-| A-14 | Secrets are not in Git; workloads are non-root with limits and probes | `make deploy-validate`, `tests/test_deploy.py` | no `Secret` objects rendered; 17 deployment tests pass | Static |
+| A-14 | Secrets are not in Git; workloads are non-root with limits and probes | `make deploy-validate`, `tests/test_deploy.py` | no `Secret` objects rendered; 19 deployment tests pass | Static |
 | A-15 | Air gap removes internet egress and forces offline mode | `make deploy-validate` | model-download NetworkPolicy absent; `HF_HUB_OFFLINE=1` present | Static |
 | A-16 | CI runs the tests and both validators on a hosted runner | GitHub Actions run `41875084383` on `31b4a7c` | unit tests, `validate_deploy`, `validate_release` and `registry verify` all passed | Measured (hosted), no cluster |
+| A-17 | The vanilla overlay runs on a real API server and kubelet | `kubectl apply -k deploy/kustomize/overlays/vanilla`; kind v0.33.0, Kubernetes 1.34 | 25 objects applied; gateway and both tier simulators 1/1; GPU tier left unschedulable by a node taint; the first apply exposed a nested `subPath` mount on the tenants Secret, now fixed and covered by `check_mounts` | Measured on kind |
+| A-18 | Live routing follows residency and cloud permission through the cluster Service | `curl` to `svc/gateway` with tenant keys (port-forward) | acme (EU, confidential) → `x-tier: cpu`, `x-route-reason: policy:primary:cpu:fallback`, `x-fallback: true`; globex (US, internal) → `x-tier: cloud`, `policy:standby:cloud-us`; audit records `vetoed: ["gpu:breaker-open"]` | Measured on kind |
+| A-19 | The audit chain verifies against the PVC-backed file | `GET /v1/audit/verify` as admin | `{"ok": true, "records": 7, "last_seq": 7, ...}`; the file's last record hash equals the in-memory head | Measured on kind |
+| A-20 | Kyverno Enforce rejects non-compliant pods and admits a compliant one | `kubectl apply` of four synthetic pods | missing readiness probe → `slm-require-probes`; `nginx:latest` → `slm-require-pinned-images`; PSS-compliant pod with probe admitted | Measured on kind (Kyverno v1.19.2) |
+| A-21 | Argo CD reconciles Applications and self-heals drift | temp Application at the vanilla overlay; patch and delete a managed ClusterPolicy | `slm-policies` Synced/Healthy/Succeeded over 6 policies; a drifted field restored in ~6 s and a deleted policy recreated in <3 s; `slm-platform` applied waves 0–2 and waits on the unschedulable GPU tier | Measured on kind (Argo CD v3.6.1) |
 
 Reproducible artifacts for each row are under [`bench/results/`](../../bench/results) and
 the test suite; [evidence.json](evidence.json) records their hashes and the commit.
@@ -35,9 +40,9 @@ the test suite; [evidence.json](evidence.json) records their hashes and the comm
 
 | # | Gap | Why | Consequence | Risk |
 |---|---|---|---|---|
-| N-01 | No OpenShift, EKS, AKS or GKE cluster | None available | Route, SCC, ServiceMonitor, Kyverno enforcement and Argo reconciliation are unexercised | [R-09](risks.md#r-09--no-live-cluster-validation) |
-| N-02 | Kyverno policies never evaluated by an admission controller | No cluster | A policy could be syntactically valid and semantically wrong | R-09 |
-| N-03 | Argo CD sync waves and PostSync hooks | No cluster | Ordering and hook failure behaviour are read, not observed | R-11 |
+| N-01 | No OpenShift, EKS, AKS or GKE cluster; kind covers vanilla only | None available | Route, SCC and ServiceMonitor are unexercised; managed control planes untested | [R-09](risks.md#r-09--no-live-openshift-validation) |
+| N-02 | The Kyverno policies still use the deprecated `kyverno.io/v1` `ClusterPolicy` kind | v1.19 warns on every apply; the CEL `policies.kyverno.io` kinds are the forward path | A future Kyverno release removes the v1 kinds and admission breaks until migrated | R-09 |
+| N-03 | Argo CD PostSync hooks and wave 4 (`gateway`) | kind has no GPU capacity, so `vllm-gpu` never becomes healthy and the platform Application stops at wave 3 | Hook ordering, the adapter loader and the in-cluster gate are read, not observed | R-11 |
 | N-04 | Air-gapped installation | No disconnected site | Mirror list and IDMS/ITMS are unproven end to end | R-09 |
 | N-05 | Xeon / EPYC CPU tier | No server hardware | CPU latency, throughput and cost are MODELLED | [R-10](risks.md#r-10--modelled-cpu-and-cloud-numbers) |
 | N-06 | TensorRT-LLM, Triton, Dynamo, SGLang | No datacentre GPU | Only vLLM was served | [R-15](risks.md#r-15--single-runtime) |
@@ -45,6 +50,7 @@ the test suite; [evidence.json](evidence.json) records their hashes and the comm
 | N-08 | Production load and HA | One host, one GPU, one gateway replica | Quotas, breakers and audit assume one writer | [R-08](risks.md#r-08--gateway-is-a-single-writer) |
 | N-09 | Security testing beyond unit tests | No pentest, fuzzing or dependency scanning in CI yet | Unknown classes of input/API defects | [R-05](risks.md#r-05--no-in-cluster-mtls), [R-16](risks.md#r-16--no-dependency-or-image-scanning) |
 | N-10 | Audit sink durability under storage failure | Single node | A failed audit write does not fail the request | [R-01](risks.md#r-01--audit-chain-is-evidence-not-prevention) |
+| N-11 | NetworkPolicy and Ingress enforcement | kind's kindnet does not enforce NetworkPolicy and ships no ingress controller | default-deny, the model-download egress rule and the Ingress path are declarative only on kind | [R-09](risks.md#r-09--no-live-openshift-validation) |
 
 ## Conditions
 
@@ -62,6 +68,7 @@ risk accepted for the reference build, not an oversight.
 | C-07 | Compare against at least one closed model on tenant-representative data, within the tenant's egress policy | R-12 | Evaluation report under the same golden contract |
 | C-08 | Automatic rollback on failed in-cluster gate (or a documented manual SLA) | R-11 | Drill: break the adapter, observe rollback, verify the audit record |
 | C-09 | Add dependency/image scanning and an API fuzz pass to CI | R-16 | CI run with no high-severity findings |
+| C-10 | Migrate the Kyverno policies from `kyverno.io/v1` `ClusterPolicy` to the CEL `policies.kyverno.io` kinds | R-09, N-02 | Policies render as `ValidatingPolicy`; the same four admission tests deny and admit identically |
 
 ## Sign-off record
 
@@ -71,7 +78,7 @@ risk accepted for the reference build, not an oversight.
 | Date | 2026-11-04 |
 | Platform release | latest manifest under [`release/`](../../release) |
 | Evidence snapshot | [evidence.json](evidence.json) |
-| Decision | **Accepted as reference architecture, conditions C-01 to C-09 open** |
+| Decision | **Accepted as reference architecture, conditions C-01 to C-10 open** |
 | Reviewer | Platform architecture (author) |
 | Independent reviewer | *not yet assigned* |
 

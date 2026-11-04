@@ -9,7 +9,9 @@ trail, a benchmark harness, a golden-set release gate and an ownership cost mode
 and measured. The stack ships as Kustomize overlays for OpenShift, vanilla Kubernetes and
 air-gapped installs, reconciled by Argo CD and enforced by Kyverno. Releases are now signed
 manifests chained to the policy, adapters, gate artifact and rendered deployment, with C4
-views and an architecture sign-off pack that states what is measured and what is not.
+views and an architecture sign-off pack that states what is measured and what is not. The
+vanilla overlay, Kyverno enforcement and Argo CD reconciliation were then exercised on a
+kind cluster; OpenShift remains static validation.
 
 ---
 
@@ -50,8 +52,8 @@ the distinction explicit:
 | Observability (Prometheus + provisioned Grafana) | **Measured** | dashboard `slm-platform`, 7 panels |
 | CPU tier (OpenVINO / llama.cpp on Xeon/EPYC) | **Modelled** — calibrated simulator, no Xeon on this laptop | `src/tiersim`, labelled `x-simulated: true` |
 | Cloud burst tier (L4 profile) | **Modelled and wired** — a standby that residency usually excludes | `tiersim-cloud`, `x-simulated: true` |
-| OpenShift / vanilla / air-gap deployment | **Static validation** — three overlays render and pass policy checks; no cluster available | `deploy/kustomize`, `make deploy-validate` |
-| GitOps, release hooks and admission policy | **Static validation** — Argo CD app-of-apps, Kyverno ClusterPolicies, PostSync eval gate | `deploy/gitops`, `deploy/policies` |
+| OpenShift / vanilla / air-gap deployment | **Vanilla verified on kind; OpenShift and air gap static** — 25 objects applied, gateway and both simulators running | `deploy/kustomize`, `make deploy-validate`, [A-17](docs/signoff/acceptance.md) |
+| GitOps, release hooks and admission policy | **Admission and Argo verified on kind; hooks unrun** — Kyverno v1.19.2 denials and Argo v3.6.1 self-heal observed | `deploy/gitops`, `deploy/policies`, [A-20](docs/signoff/acceptance.md), [A-21](docs/signoff/acceptance.md) |
 | Signed release manifest (Ed25519, canonical JSON, drift checks) | **Measured** | `make release`, `make release-check`, `release/slm-0.5.0.json` |
 | C4 views, threat model, acceptance and sign-off pack | **Documented** — review artifacts, not runtime evidence | `docs/architecture/c4.md`, `docs/signoff/` |
 | CI pipeline (tests + both validators) | **Verified** — GitHub Actions run `41875084383`, all steps green | `.github/workflows/ci.yml` |
@@ -157,7 +159,18 @@ make deploy-secret   # create slm-tenants from the gitignored config/tenants.yam
 | `airgap` | OpenShift shape plus offline Hugging Face env and no model-download egress | Disconnected site |
 
 The manifests name `docker.io/slm/*`; retag or mirror them into the registry your cluster
-pulls from. Then reconcile with Argo CD:
+pulls from. The kustomization reads `config/policy.yaml` from outside its own tree, so
+Argo's repo server needs the kustomize load-restrictor flag. Argo CD v3 removed the
+per-Application `spec.source.kustomize.buildOptions` field and rejects an Application that
+carries it, so set the flag once for the repository:
+
+```bash
+kubectl -n argocd patch configmap argocd-cm --type merge -p \
+  '{"data":{"kustomize.buildOptions":"--load-restrictor LoadRestrictionsNone"}}'
+kubectl -n argocd rollout restart deploy/argocd-repo-server
+```
+
+Then reconcile:
 
 ```bash
 kubectl apply -f deploy/gitops/argocd/project.yaml
@@ -196,11 +209,18 @@ cluster-scoped `IDMS`/`ITMS` objects with `kubectl apply -k deploy/openshift/air
 `deploy/gitops/apps/platform.yaml` at `overlays/airgap`, and seed `slm-model-cache` from the
 mirrored weights before first start. The application manifests do not change.
 
-**Limits, stated.** There is no cluster in this environment, so this is static validation:
-Kustomize rendering plus assertions, not an applied cluster and not a live Kyverno
-admission. Images are pinned by tag rather than digest (production should rewrite them at
+**Limits, stated.** The vanilla overlay ran on a kind v0.33.0 cluster: 25 objects applied,
+gateway and both simulators answering, Kyverno v1.19.2 denying two synthetic pods, and Argo
+CD v3.6.1 self-healing a drifted policy. That pass also found a real defect static review
+missed (a `subPath` mount nested inside a read-only ConfigMap mount), now fixed and checked
+by the validator. What kind does not cover: OpenShift SCC/Route/ServiceMonitor, the
+release PostSync hooks, the air-gap mirror, NetworkPolicy enforcement (kindnet does not
+enforce it) and an ingress controller (the Ingress object has no backing controller). The
+GPU tier could not schedule, so the platform Application stops at its wave-3 health gate by
+design. Images are pinned by tag rather than digest (production should rewrite them at
 promotion), PVCs rely on the cluster default storage class, and the gateway is deliberately
-one replica. The full rationale is in [ADR-0006](docs/adr/ADR-0006-deployment-gitops.md).
+one replica. The full rationale is in [ADR-0006](docs/adr/ADR-0006-deployment-gitops.md);
+the observed rows are A-17 to A-21 in the [acceptance pack](docs/signoff/acceptance.md).
 
 ---
 
@@ -247,7 +267,7 @@ The review pack answers the questions a reviewer actually asks, in order:
 |---|---|
 | [requirements.md](docs/signoff/requirements.md) | What was asked, requirement by requirement, and which ones are not met |
 | [c4.md](docs/architecture/c4.md) | What the system is: L1–L4 views, runtime sequence, trust boundaries |
-| [acceptance.md](docs/signoff/acceptance.md) | What was verified (A-01…A-16), what was not (N-01…N-10), and the conditions (C-01…C-09) |
+| [acceptance.md](docs/signoff/acceptance.md) | What was verified (A-01…A-21), what was not (N-01…N-11), and the conditions (C-01…C-10) |
 | [threat-model.md](docs/signoff/threat-model.md) | What can go wrong, by asset, actor and entry point |
 | [risks.md](docs/signoff/risks.md) | Which risks are accepted, with anchors into the code |
 | [operations.md](docs/signoff/operations.md) | How it runs: SLOs, alerts, runbooks, backups |
@@ -873,9 +893,15 @@ release cannot produce a manifest at all, because a "signed record of a failed g
 forensic artifact that belongs in the CI log, not in the registry next to passing releases.
 
 **The review pack states what is missing.** Requirements are mapped one by one with explicit
-`Not demonstrated` and `N/A` statuses; acceptance lists N-01…N-10 beside A-01…A-16; each
+`Not demonstrated` and `N/A` statuses; acceptance lists N-01…N-11 beside A-01…A-21; each
 verdict points at the risk it accepts. A sign-off that only lists successes is not a
 sign-off, it is marketing.
+
+**A cluster pass changes the evidence, not the claims.** The kind run converted three rows
+from static to observed and immediately found a mount defect that rendering could not see.
+The same pass showed what the environment cannot cover: with no GPU node, the platform
+Application stops at its wave-3 health gate, which is the ordering behaving as written, not
+a failure to report as success.
 
 **CI runs the same commands a reviewer does.** The workflow is tests, `validate_deploy`,
 `validate_release`, `registry verify` — no bespoke checks that exist only in CI. Its first

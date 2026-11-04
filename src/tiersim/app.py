@@ -60,10 +60,10 @@ def build_answer(prompt: str, max_tokens: int) -> list[str]:
         ).split(" ")
     else:
         words = (
-            "This response comes from the simulated CPU tier. The timing follows a "
-            "calibrated prefill and decode profile for a four billion parameter model "
-            "on Xeon-class hardware, so latency and queueing behave like the real tier "
-            "without requiring the hardware to be present. "
+            f"This response comes from the simulated {PROFILE.tier} tier. The timing "
+            "follows a calibrated prefill and decode profile for a four billion parameter "
+            f"model on {PROFILE.hardware}, so latency and queueing behave like the real "
+            "tier without requiring the hardware to be present. "
         ).split() * 6
     return words[:max_tokens]
 

@@ -9,7 +9,7 @@ Status vocabulary:
 |---|---|
 | **Measured** | Ran on the RTX 4080 host in this repository; artifact or test is committed |
 | **Modelled** | Calibrated simulator, labelled `x-simulated: true`; no hardware of that class was available |
-| **Static** | Manifests render and pass checks; no live cluster was used |
+| **Static** | Manifests render and pass checks; the path was not run on the target substrate |
 | **Partial** | Part of the requirement is evidenced, part is not — the gap column says which |
 | **Not demonstrated** | No evidence in this repository |
 | **N/A** | Personal history, not something a repository can evidence |
@@ -59,8 +59,9 @@ Status vocabulary:
   static deployment validation.
 - **Modelled:** CPU tier, cloud tier, GPU reference profile, queueing behaviour on those
   tiers.
-- **Static only:** everything OpenShift, Kyverno and Argo CD — the artifacts are checked,
-  but no cluster reconciled them.
+- **Static only:** everything OpenShift, and the air-gap mirror. The vanilla overlay,
+  Kyverno admission and Argo CD reconciliation were observed on a kind cluster (A-17–A-21);
+  OpenShift SCC, Route, ServiceMonitor and the release hooks were not.
 - **Explicitly absent:** production multi-tenant operation, closed-model comparison,
   TensorRT-LLM/Triton/Dynamo/SGLang, OpenVINO/ROCm, real Xeon/EPYC measurements, automatic
   rollback, shared gateway state for HA.

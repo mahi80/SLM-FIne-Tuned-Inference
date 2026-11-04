@@ -64,7 +64,10 @@ Three properties from earlier phases made the deployment design non-obvious:
    port in the rendered set, and fails if any alias points at something the cluster does
    not expose.
 3. **One policy source, generated into a ConfigMap.** The base generates `slm-policy` from
-   `config/policy.yaml` with `--load-restrictor LoadRestrictionsNone`. The generated name
+   `config/policy.yaml` with `--load-restrictor LoadRestrictionsNone`. Argo CD v3 removed
+   `spec.source.kustomize.buildOptions`, so the flag is set once for the repository in
+   `argocd-cm` (`kustomize.buildOptions`) rather than per Application; the manifest
+   comments carry the patch. The generated name
    carries a content hash, so a policy edit changes the gateway pod template and rolls the
    pod. The validator asserts the rendered ConfigMap is identical to the file, so a stale
    or hand-edited cluster copy fails the check.
@@ -96,8 +99,9 @@ Three properties from earlier phases made the deployment design non-obvious:
 9. **GitOps as app-of-apps.** An Argo CD `AppProject` restricts sources and destinations,
    blacklists Secrets, and permits only the cluster-scoped kinds the project needs. The
    root Application reconciles `deploy/gitops/apps`; sync waves install admission policy
-   (0) before the platform (10). The platform Application points at the OpenShift overlay
-   and carries the kustomize build option the policy generator requires.
+   (0) before the platform (10). The platform Application points at the OpenShift overlay;
+   the policy generator's build flag is a repository-wide `argocd-cm` setting, because
+   Argo CD v3 rejects the per-Application `kustomize.buildOptions` field.
 10. **Air-gap is a mirror, not a fork.** `deploy/openshift/airgap` contains
     `ImageDigestMirrorSet`, `ImageTagMirrorSet`, the exact `images.txt` list and a mirror
     script. The application overlay stays identical to the connected one apart from offline
@@ -112,17 +116,22 @@ Three properties from earlier phases made the deployment design non-obvious:
 - `python tools/validate_deploy.py` passes all three: image pins, model revision, security
   contexts, resources, probes, Service/policy wiring, ConfigMap equality, single-replica
   gateway, no Secrets, namespace placement, overlay-specific exposure.
-- 17 deployment tests (synthetic negative cases plus rendered-overlay integration); the
-  full suite is 66 tests.
+- 19 deployment tests (synthetic negative cases plus rendered-overlay integration); the
+  full suite is 106 tests.
+- A kind v0.33.0 cluster applied the vanilla overlay (25 objects, gateway and both
+  simulators running), evaluated the Kyverno policies in Enforce, and reconciled the
+  policies Application with self-heal. That pass found a nested `subPath` mount that static
+  review missed; it is fixed and covered by `check_mounts`.
 - The release-gate image builds and runs as UID 1001 with the golden set and gate config
   at the paths the hook passes.
 
 ### Limits, stated rather than hidden
 
-- **No live cluster in this environment.** `oc`, `kubeconform` and a Kubernetes API are
-  absent. Validation is static: Kustomize rendering plus schema-shaped assertions, not an
-  applied cluster and not a real Kyverno evaluation. The Kyverno policies are written
-  against the documented API but have not been admitted by a Kyverno instance here.
+- **No OpenShift in this environment.** The vanilla path was applied to kind; OpenShift's
+  SCC, Route, ServiceMonitor and release hooks are still static. kind's CNI does not
+  enforce NetworkPolicy and has no ingress controller, so those paths remain declarative.
+  Argo CD v3 removed the per-Application `kustomize.buildOptions` field; the build flag now
+  lives in `argocd-cm` and an Application that carries the old field is rejected at decode.
 - **Images are pinned by tag, not digest.** `vllm/vllm-openai:v0.33.0` is the Phase 0
   runtime tag; production should rewrite tags to digests at promotion. The validator
   accepts either.

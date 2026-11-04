@@ -57,8 +57,10 @@ GPU, and `make test` / `make release-check` run without a cluster.
    model change produces a different file, which invalidates the manifest until it is
    rebuilt and re-signed.
 3. **Static validation is not deployment validation.** Manifests render and pass policy
-   checks; no OpenShift cluster was available. Every OpenShift claim is marked *static* and
-   the gap is risk [R-09](risks.md#r-09--no-live-openshift-validation).
+   checks; a kind cluster then applied the vanilla overlay and exercised Kyverno and Argo,
+   which is recorded as observed evidence (A-17 to A-21). No OpenShift cluster was
+   available, so every OpenShift claim is marked *static* and the gap is risk
+   [R-09](risks.md#r-09--no-live-openshift-validation).
 4. **The signer is a demo key in this repository's threat model.** The private key is
    gitignored and was generated locally. Signature verification proves the manifest was
    signed by that key; it does not prove who holds it. See

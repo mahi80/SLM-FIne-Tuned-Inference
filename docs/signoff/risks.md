@@ -14,7 +14,7 @@ Each entry says what exists today, what is left after mitigation, and which cond
 | [R-06](#r-06--prompt-content-is-not-inspected) | No DLP or runtime guardrail on prompt content | Medium | High | **High** | C-07 |
 | [R-07](#r-07--tenant-policy-misconfiguration) | A tenant policy edit can permit cloud egress | Medium | High | **High** | C-01, C-03 |
 | [R-08](#r-08--gateway-is-a-single-writer) | Gateway is a single writer and single point of failure | Medium | Medium | Medium | C-05 |
-| [R-09](#r-09--no-live-cluster-validation) | No live cluster validated any manifest | High | High | **High** | C-01 |
+| [R-09](#r-09--no-live-openshift-validation) | OpenShift-only paths unvalidated on a real cluster | Medium | High | **High** | C-01 |
 | [R-10](#r-10--modelled-cpu-and-cloud-numbers) | CPU and cloud numbers are modelled | High | Medium | **High** | C-06 |
 | [R-11](#r-11--no-automatic-rollback-on-gate-failure) | Failed in-cluster gate does not auto-roll back | Medium | Medium | Medium | C-08 |
 | [R-12](#r-12--evaluation-set-is-small-and-synthetic) | Evaluation set is small and synthetic | High | High | **High** | C-07 |
@@ -129,17 +129,20 @@ writer.
 (Redis/Postgres with advisory locking), then scale with a `RollingUpdate` (C-05). Until then,
 the single replica is the honest design.
 
-### R-09 — No live cluster validation
+### R-09 — No live OpenShift validation
 
-**What exists.** Three overlays render and pass 60+ static assertions; 17 deployment tests
+**What exists.** Three overlays render and pass 60+ static assertions; 19 deployment tests
 cover the failure modes that matter; Kyverno policies and Argo CD applications are committed.
+A kind v0.33.0 cluster then applied the vanilla overlay, admitted and rejected pods through
+Kyverno v1.19.2, reconciled two Applications with Argo CD v3.6.1, and found one real defect
+(the gateway tenants Secret mount) that static review had missed.
 
-**Residual.** No OpenShift, Kyverno controller or Argo CD instance evaluated them. SCC
-interaction with the non-root vLLM image, Route TLS behaviour, ServiceMonitor discovery, hook
-ordering and mirror configuration are all unobserved.
+**Residual.** No OpenShift instance evaluated SCC assignment, Route TLS, ServiceMonitor
+discovery, release hooks or the air-gap mirror path. kind's CNI does not enforce
+NetworkPolicy and has no ingress controller, so those paths are still unobserved.
 
 **Closure.** Execute C-01 on a real cluster and attach the outputs to this pack. Until then,
-every OpenShift claim stays marked *static*.
+every OpenShift-specific claim stays marked *static*.
 
 ### R-10 — Modelled CPU and cloud numbers
 

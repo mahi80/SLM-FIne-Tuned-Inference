@@ -61,7 +61,7 @@ document names what crosses them and what would happen if it did.
 | **D**enial of service | Hung upstream holds requests | Gateway → tier | Circuit breaker per `alias:candidate`; timeouts; attempt list fallback | No request dead-line cancellation end to end |
 | **E**levation of privilege | Tenant calls admin endpoints | B1 → `/v1/policy/*` | `admin` flag in tenant config, checked by a dependency | Static key compromise yields admin if the key is an admin key — R-04 |
 | **E**levation of privilege | Pod escapes or writes host paths | Admission | Non-root, `RuntimeDefault` seccomp, drop `ALL`, read-only rootfs (vLLM excepted), no host namespaces or `hostPath`; Kyverno Enforce | vLLM runs with a writable root filesystem and a CUDA device; that is the widest exception in the system |
-| **E**levation of privilege | Unpinned or privileged image admitted | Admission | Six Kyverno ClusterPolicies in Enforce | Policies are unevaluated without a cluster — [R-09](risks.md#r-09--no-live-cluster-validation) |
+| **E**levation of privilege | Unpinned or privileged image admitted | Admission | Six Kyverno ClusterPolicies in Enforce; denials observed on kind for probes and `:latest` | Policies still use the deprecated `kyverno.io/v1` kind — [R-09](risks.md#r-09--no-live-openshift-validation), C-10 |
 
 ## AI-specific threats
 
