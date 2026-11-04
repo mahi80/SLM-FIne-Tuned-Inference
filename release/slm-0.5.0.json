@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "release_id": "slm-0.5.0",
-  "created_at": "2026-11-04T17:10:46Z",
+  "created_at": "2026-11-04T23:49:27Z",
   "source": {
-    "commit": "8f57e5311f98df8217a038aa15cd792ebc3c04e0",
+    "commit": "4a703099ffb481ae52f36e68a9dafeabee6f872c",
     "dirty": false
   },
   "model": {
@@ -16,19 +16,23 @@
   "images": [
     {
       "name": "vllm/vllm-openai",
-      "tag": "v0.33.0"
+      "tag": "v0.33.0",
+      "digest": "sha256:d825baf9ce4b1b6bfc5ecc7b79880c7e6748c65a72d697ce3d47607aafa84c6e"
     },
     {
-      "name": "slm/gateway",
-      "tag": "0.5.0"
+      "name": "ghcr.io/mahi80/slm-gateway",
+      "tag": "0.5.0",
+      "digest": "sha256:16759fe6fd4febc6d88509283cfe34f69fd29d3eaf0b3671911cf1a6f587ebdf"
     },
     {
-      "name": "slm/tiersim",
-      "tag": "0.5.0"
+      "name": "ghcr.io/mahi80/slm-tiersim",
+      "tag": "0.5.0",
+      "digest": "sha256:33b9b3ff3b9228b43057f58526bb350ea899b6088dbcf535cad75247db845197"
     },
     {
-      "name": "slm/eval",
-      "tag": "0.5.0"
+      "name": "ghcr.io/mahi80/slm-eval",
+      "tag": "0.5.0",
+      "digest": "sha256:137d10b44f2d235ef74e3d6f4797c09ea9f56ca7baeab92eda991262b30b7fd4"
     }
   ],
   "adapters": [
