@@ -20,6 +20,7 @@ What it protects, in order of how expensive the mistake is:
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -43,6 +44,7 @@ CLUSTER_SCOPED = {
 
 VLLM_IMAGE = "vllm/vllm-openai:v0.33.0"
 MODEL_REVISION = "b37d1ccb77e27a70fe4222d995fda27940eead5a"
+DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 def release_identity(path: Path = REPO / "config/release.yaml") -> tuple[str, str, str]:
@@ -109,15 +111,14 @@ def containers(spec: dict) -> list[dict]:
     return list(spec.get("containers") or []) + list(spec.get("initContainers") or [])
 
 
-def split_image(image: str) -> tuple[str, str | None]:
-    if "@" in image:
-        name, digest = image.split("@", 1)
-        return name, "@" + digest
-    tail = image.rsplit("/", 1)[-1]
+def parse_image(image: str) -> tuple[str, str | None, str | None]:
+    """Split `name[:tag][@sha256:...]`; a registry port stays part of the name."""
+    name, _, digest = image.partition("@")
+    tail = name.rsplit("/", 1)[-1]
+    tag = None
     if ":" in tail:
-        name, tag = image.rsplit(":", 1)
-        return name, tag
-    return image, None
+        name, tag = name.rsplit(":", 1)
+    return name, tag, digest or None
 
 
 def label(doc: dict) -> str:
@@ -142,10 +143,12 @@ def check_images(docs: list[dict]) -> list[str]:
             if not image:
                 errors.append(f"{where}: no image")
                 continue
-            _, ref = split_image(image)
-            if ref is None:
-                errors.append(f"{where}: {image} has no tag or digest")
-            elif ref == "latest":
+            _, tag, digest = parse_image(image)
+            if not digest:
+                errors.append(f"{where}: {image} is not pinned by digest")
+            elif not DIGEST.match(digest):
+                errors.append(f"{where}: {image} has a malformed digest")
+            if tag == "latest":
                 errors.append(f"{where}: {image} uses the latest tag")
     return errors
 
@@ -161,7 +164,7 @@ def check_model_pin(docs: list[dict]) -> list[str]:
         if "--served-model-name" not in args:
             continue
         for container in spec.get("containers") or []:
-            if container.get("image") != VLLM_IMAGE:
+            if (container.get("image") or "").split("@")[0] != VLLM_IMAGE:
                 errors.append(f"{label(doc)}: vLLM image is {container.get('image')}, expected {VLLM_IMAGE}")
         if MODEL_REVISION not in args:
             errors.append(f"{label(doc)}: model revision is not pinned to {MODEL_REVISION}")

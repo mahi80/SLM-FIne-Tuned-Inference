@@ -1,10 +1,12 @@
 # Every image the platform references, as source=destination for
-# `oc image mirror -f`. @MIRROR@ is substituted by mirror.sh.
+# `oc image mirror -f`. @MIRROR@ is substituted by mirror.sh. Sources are
+# pinned by digest, matching config/release.yaml; the destination keeps a tag
+# because IDMS/ITMS resolve the digest to the mirror repository.
 #
 # Keep this list in step with:
 #   deploy/kustomize/base/kustomization.yaml          (vLLM, gateway, tiersim)
 #   deploy/kustomize/components/release-gate/          (eval)
-docker.io/vllm/vllm-openai:v0.33.0=@MIRROR@/vllm/vllm-openai:v0.33.0
-docker.io/slm/gateway:0.5.0=@MIRROR@/slm/gateway:0.5.0
-docker.io/slm/tiersim:0.5.0=@MIRROR@/slm/tiersim:0.5.0
-docker.io/slm/eval:0.5.0=@MIRROR@/slm/eval:0.5.0
+docker.io/vllm/vllm-openai@sha256:d825baf9ce4b1b6bfc5ecc7b79880c7e6748c65a72d697ce3d47607aafa84c6e=@MIRROR@/vllm/vllm-openai:v0.33.0
+ghcr.io/mahi80/slm-gateway@sha256:16759fe6fd4febc6d88509283cfe34f69fd29d3eaf0b3671911cf1a6f587ebdf=@MIRROR@/ghcr.io/mahi80/slm-gateway:0.5.0
+ghcr.io/mahi80/slm-tiersim@sha256:33b9b3ff3b9228b43057f58526bb350ea899b6088dbcf535cad75247db845197=@MIRROR@/ghcr.io/mahi80/slm-tiersim:0.5.0
+ghcr.io/mahi80/slm-eval@sha256:137d10b44f2d235ef74e3d6f4797c09ea9f56ca7baeab92eda991262b30b7fd4=@MIRROR@/ghcr.io/mahi80/slm-eval:0.5.0

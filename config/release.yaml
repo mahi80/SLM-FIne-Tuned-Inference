@@ -14,15 +14,23 @@ model:
   quantization: awq-w4a16
   served_name: slm-small
 
+# Images are pinned by digest. The tag is kept so a human can read which
+# release a pod runs; the digest is what Kubernetes resolves, so a moved tag
+# cannot silently change the bundle. First-party images are published from
+# this repository by .github/workflows/images.yml.
 images:
   - name: vllm/vllm-openai
     tag: v0.33.0
-  - name: slm/gateway
+    digest: sha256:d825baf9ce4b1b6bfc5ecc7b79880c7e6748c65a72d697ce3d47607aafa84c6e
+  - name: ghcr.io/mahi80/slm-gateway
     tag: "0.5.0"
-  - name: slm/tiersim
+    digest: sha256:16759fe6fd4febc6d88509283cfe34f69fd29d3eaf0b3671911cf1a6f587ebdf
+  - name: ghcr.io/mahi80/slm-tiersim
     tag: "0.5.0"
-  - name: slm/eval
+    digest: sha256:33b9b3ff3b9228b43057f58526bb350ea899b6088dbcf535cad75247db845197
+  - name: ghcr.io/mahi80/slm-eval
     tag: "0.5.0"
+    digest: sha256:137d10b44f2d235ef74e3d6f4797c09ea9f56ca7baeab92eda991262b30b7fd4
 
 adapters:
   - name: triage-v1

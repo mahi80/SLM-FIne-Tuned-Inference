@@ -24,6 +24,7 @@ import yaml
 SCHEMA_VERSION = 1
 RELEASE_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{2,63}$")
 HEX_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 REVISION = re.compile(r"^[0-9a-f]{7,40}$")
 NOTES = (
     "Adapter weights are training artifacts and are not committed; the manifest pins their digests.",
@@ -260,7 +261,12 @@ def build_manifest(
         "source": git_state(repo),
         "model": dict(config["model"]),
         "images": [
-            {"name": image["name"], "tag": str(image["tag"])} for image in config["images"]
+            {
+                "name": image["name"],
+                "tag": str(image["tag"]),
+                "digest": str(image.get("digest", "")),
+            }
+            for image in config["images"]
         ],
         "adapters": _adapter_records(repo, config, adapters_dir),
         "policy": _policy_record(repo, config.get("policy", "config/policy.yaml")),
@@ -299,6 +305,8 @@ def validate_manifest(manifest: dict) -> list[str]:
             problems.append("image without a name")
         if not image.get("tag") or image.get("tag") == "latest":
             problems.append(f"image {image.get('name')} is not pinned")
+        if not DIGEST.match(str(image.get("digest", ""))):
+            problems.append(f"image {image.get('name')} is not pinned by digest")
 
     adapters = manifest.get("adapters") or []
     if not adapters:
@@ -339,7 +347,8 @@ def summarize(manifest: dict) -> list[str]:
     model = manifest.get("model") or {}
     adapters = ", ".join(a.get("name", "?") for a in manifest.get("adapters") or [])
     images = ", ".join(
-        "{}:{}".format(i.get("name"), i.get("tag")) for i in manifest.get("images") or []
+        "{}:{}@{}".format(i.get("name"), i.get("tag"), str(i.get("digest"))[:19])
+        for i in manifest.get("images") or []
     )
     lines = [
         f"release   {manifest.get('release_id')} (schema {manifest.get('schema_version')})",

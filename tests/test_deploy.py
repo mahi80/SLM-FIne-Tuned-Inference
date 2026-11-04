@@ -6,12 +6,13 @@ from pathlib import Path
 from tools import validate_deploy as vd
 
 REPO = Path(__file__).resolve().parent.parent
+DIGEST = "sha256:" + "a" * 64
 
 
 def deployment(
     name="gateway",
     *,
-    image="slm/gateway:0.5.0",
+    image=f"slm/gateway:0.5.0@{DIGEST}",
     labels=None,
     args=None,
     pod_security=None,
@@ -71,22 +72,34 @@ def service(name, port):
 
 
 class ImageChecks(unittest.TestCase):
-    def test_tag_is_required(self):
+    def test_digest_is_required(self):
         self.assertEqual(vd.check_images([deployment()]), [])
+        errors = vd.check_images([deployment(image="slm/gateway:0.5.0")])
+        self.assertTrue(any("is not pinned by digest" in error for error in errors))
+
+    def test_untagged_image_is_rejected(self):
         errors = vd.check_images([deployment(image="slm/gateway")])
-        self.assertTrue(any("no tag or digest" in error for error in errors))
+        self.assertTrue(any("is not pinned by digest" in error for error in errors))
 
     def test_latest_is_rejected(self):
-        errors = vd.check_images([deployment(image="slm/gateway:latest")])
+        errors = vd.check_images([deployment(image=f"slm/gateway:latest@{DIGEST}")])
         self.assertTrue(any("latest" in error for error in errors))
 
     def test_digest_is_accepted(self):
-        digest = "slm/gateway@sha256:" + "a" * 64
-        self.assertEqual(vd.check_images([deployment(image=digest)]), [])
+        self.assertEqual(vd.check_images([deployment(image=f"slm/gateway@{DIGEST}")]), [])
 
-    def test_registry_port_without_tag_is_rejected(self):
+    def test_malformed_digest_is_rejected(self):
+        errors = vd.check_images([deployment(image="slm/gateway:0.5.0@sha256:abc")])
+        self.assertTrue(any("malformed digest" in error for error in errors))
+
+    def test_registry_port_stays_in_the_name(self):
+        image = f"registry.internal:5000/gateway:0.5.0@{DIGEST}"
+        self.assertEqual(vd.parse_image(image), ("registry.internal:5000/gateway", "0.5.0", DIGEST))
+        self.assertEqual(vd.check_images([deployment(image=image)]), [])
+
+    def test_registry_port_without_tag_still_needs_a_digest(self):
         errors = vd.check_images([deployment(image="registry.internal:5000/gateway")])
-        self.assertTrue(any("no tag or digest" in error for error in errors))
+        self.assertTrue(any("is not pinned by digest" in error for error in errors))
 
 
 class SecurityChecks(unittest.TestCase):

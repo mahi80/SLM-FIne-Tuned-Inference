@@ -13,6 +13,14 @@ from tools import validate_release as vr
 
 REPO = Path(__file__).resolve().parent.parent
 POLICY = 'version: "1"\naliases: {}\n'
+DIGESTS = {
+    "vllm/vllm-openai": "sha256:" + "1" * 64,
+    "slm/gateway": "sha256:" + "2" * 64,
+    "slm/eval": "sha256:" + "3" * 64,
+}
+VLLM_IMAGE = f"vllm/vllm-openai:v0.33.0@{DIGESTS['vllm/vllm-openai']}"
+GATEWAY_IMAGE = f"slm/gateway:0.5.0@{DIGESTS['slm/gateway']}"
+EVAL_IMAGE = f"slm/eval:0.5.0@{DIGESTS['slm/eval']}"
 
 
 def manifest_for(policy_text=POLICY):
@@ -26,9 +34,9 @@ def manifest_for(policy_text=POLICY):
             "quantization": "awq-w4a16",
         },
         "images": [
-            {"name": "vllm/vllm-openai", "tag": "v0.33.0"},
-            {"name": "slm/gateway", "tag": "0.5.0"},
-            {"name": "slm/eval", "tag": "0.5.0"},
+            {"name": "vllm/vllm-openai", "tag": "v0.33.0", "digest": DIGESTS["vllm/vllm-openai"]},
+            {"name": "slm/gateway", "tag": "0.5.0", "digest": DIGESTS["slm/gateway"]},
+            {"name": "slm/eval", "tag": "0.5.0", "digest": DIGESTS["slm/eval"]},
         ],
         "adapters": [
             {"name": "triage-v1", "served_name": "triage-v1"},
@@ -64,7 +72,7 @@ def deployment(name, image, args=None):
 def docs_for(
     manifest,
     *,
-    gateway_image="slm/gateway:0.5.0",
+    gateway_image=GATEWAY_IMAGE,
     revision=None,
     served=None,
     adapters=("triage-v1", "triage-v2"),
@@ -75,7 +83,7 @@ def docs_for(
     return [
         deployment(
             "vllm-gpu",
-            "vllm/vllm-openai:v0.33.0",
+            VLLM_IMAGE,
             [
                 model["id"],
                 "--revision",
@@ -104,7 +112,7 @@ def docs_for(
                         "containers": [
                             {
                                 "name": "gate",
-                                "image": "slm/eval:0.5.0",
+                                "image": EVAL_IMAGE,
                                 "args": ["--model", gate_model],
                             }
                         ]
@@ -131,8 +139,18 @@ class RenderedTests(unittest.TestCase):
         self.assertTrue(any("undeclared image" in e for e in errors))
 
     def test_image_tag_drift_is_rejected(self):
-        errors = self.errors(docs_for(self.manifest, gateway_image="slm/gateway:0.5.1"))
+        image = f"slm/gateway:0.5.1@{DIGESTS['slm/gateway']}"
+        errors = self.errors(docs_for(self.manifest, gateway_image=image))
         self.assertTrue(any("signed release declares slm/gateway:0.5.0" in e for e in errors))
+
+    def test_image_digest_drift_is_rejected(self):
+        image = f"slm/gateway:0.5.0@sha256:{'b' * 64}"
+        errors = self.errors(docs_for(self.manifest, gateway_image=image))
+        self.assertTrue(any("signed release pins slm/gateway@sha256:2" in e for e in errors))
+
+    def test_image_without_digest_is_rejected(self):
+        errors = self.errors(docs_for(self.manifest, gateway_image="slm/gateway:0.5.0"))
+        self.assertTrue(any("signed release pins slm/gateway@sha256:2" in e for e in errors))
 
     def test_model_revision_drift_is_rejected(self):
         errors = self.errors(docs_for(self.manifest, revision="b" * 40))
@@ -178,6 +196,9 @@ class ConfigTests(unittest.TestCase):
         config["images"][1]["tag"] = "0.5.1"
         self.assertTrue(any("config images" in e for e in vr.check_config(manifest, config)))
         config["images"][1]["tag"] = "0.5.0"
+        config["images"][1]["digest"] = "sha256:" + "b" * 64
+        self.assertTrue(any("config images" in e for e in vr.check_config(manifest, config)))
+        config["images"][1]["digest"] = DIGESTS["slm/gateway"]
         config["release_id"] = "slm-test-2"
         self.assertTrue(any("release.yaml is" in e for e in vr.check_config(manifest, config)))
 

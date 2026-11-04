@@ -11,7 +11,8 @@ air-gapped installs, reconciled by Argo CD and enforced by Kyverno. Releases are
 manifests chained to the policy, adapters, gate artifact and rendered deployment, with C4
 views and an architecture sign-off pack that states what is measured and what is not. The
 vanilla overlay, Kyverno enforcement and Argo CD reconciliation were then exercised on a
-kind cluster; OpenShift remains static validation.
+kind cluster; OpenShift remains static validation. First-party images are now built and
+published to GHCR by CI, and every workload image is pinned by digest in the signed release.
 
 ---
 
@@ -55,6 +56,7 @@ the distinction explicit:
 | OpenShift / vanilla / air-gap deployment | **Vanilla verified on kind; OpenShift and air gap static** — 25 objects applied, gateway and both simulators running | `deploy/kustomize`, `make deploy-validate`, [A-17](docs/signoff/acceptance.md) |
 | GitOps, release hooks and admission policy | **Admission and Argo verified on kind; hooks unrun** — Kyverno v1.19.2 denials and Argo v3.6.1 self-heal observed | `deploy/gitops`, `deploy/policies`, [A-20](docs/signoff/acceptance.md), [A-21](docs/signoff/acceptance.md) |
 | Signed release manifest (Ed25519, canonical JSON, drift checks) | **Measured** | `make release`, `make release-check`, `release/slm-0.5.0.json` |
+| Image supply (first-party build → GHCR → digest pin) | **Measured (hosted CI + registry)** — images run `41935648483` published three public packages; all four workload images render as `@sha256:`; no cluster pulled them yet | `.github/workflows/images.yml`, [A-22](docs/signoff/acceptance.md) |
 | C4 views, threat model, acceptance and sign-off pack | **Documented** — review artifacts, not runtime evidence | `docs/architecture/c4.md`, `docs/signoff/` |
 | CI pipeline (tests + both validators) | **Verified** — GitHub Actions run `41875084383`, all steps green | `.github/workflows/ci.yml` |
 
@@ -146,7 +148,7 @@ The compose stack is the developer loop. The cluster path keeps the same
 to a real Service after deployment — and the validator fails the build if it does not.
 
 ```bash
-make deploy-images   # build slm/gateway, slm/tiersim and slm/eval, then push to your registry
+make deploy-images   # optional: build local copies; the cluster pulls the CI-published digests
 make deploy-validate # render all three overlays and check the invariants (no cluster needed)
 make deploy-render   # write deploy/rendered/{openshift,vanilla,airgap}.yaml
 make deploy-secret   # create slm-tenants from the gitignored config/tenants.yaml
@@ -158,8 +160,10 @@ make deploy-secret   # create slm-tenants from the gitignored config/tenants.yam
 | `vanilla` | nginx Ingress, explicit UID/fsGroup 1001, no hooks | EKS / AKS / GKE / kind |
 | `airgap` | OpenShift shape plus offline Hugging Face env and no model-download egress | Disconnected site |
 
-The manifests name `docker.io/slm/*`; retag or mirror them into the registry your cluster
-pulls from. The kustomization reads `config/policy.yaml` from outside its own tree, so
+The manifests resolve first-party images from `ghcr.io/mahi80/*` and vLLM from Docker Hub,
+each pinned by digest. The GHCR packages are public; for a private mirror, retag the same
+digests into the registry your cluster pulls from (the air-gap overlay has an `oc image
+mirror` list). The kustomization reads `config/policy.yaml` from outside its own tree, so
 Argo's repo server needs the kustomize load-restrictor flag. Argo CD v3 removed the
 per-Application `spec.source.kustomize.buildOptions` field and rejects an Application that
 carries it, so set the flag once for the repository:
@@ -217,10 +221,13 @@ by the validator. What kind does not cover: OpenShift SCC/Route/ServiceMonitor, 
 release PostSync hooks, the air-gap mirror, NetworkPolicy enforcement (kindnet does not
 enforce it) and an ingress controller (the Ingress object has no backing controller). The
 GPU tier could not schedule, so the platform Application stops at its wave-3 health gate by
-design. Images are pinned by tag rather than digest (production should rewrite them at
-promotion), PVCs rely on the cluster default storage class, and the gateway is deliberately
-one replica. The full rationale is in [ADR-0006](docs/adr/ADR-0006-deployment-gitops.md);
-the observed rows are A-17 to A-21 in the [acceptance pack](docs/signoff/acceptance.md).
+design. Every workload image is pinned by digest: the three first-party images come from
+public GHCR packages built by CI, and the upstream vLLM digest is recorded in the signed
+manifest. No cluster has pulled the GHCR images yet, so their registry-to-kubelet path is
+still unproven. PVCs rely on the cluster default storage class, and the gateway is
+deliberately one replica. The full rationale is in
+[ADR-0006](docs/adr/ADR-0006-deployment-gitops.md); the observed rows are A-17 to A-22 in
+the [acceptance pack](docs/signoff/acceptance.md).
 
 ---
 
@@ -228,8 +235,8 @@ the observed rows are A-17 to A-21 in the [acceptance pack](docs/signoff/accepta
 
 A release here is a manifest, not a git tag. `make release` writes
 `release/slm-0.5.0.json` — canonical JSON that pins the base model revision, the digest of
-every adapter file, the image tags, the policy version and hash, the gate artifact and its
-verdict, the benchmark and cost evidence, and the commit the manifest was built from. It
+every adapter file, the image digests, the policy version and hash, the gate artifact and
+its verdict, the benchmark and cost evidence, and the commit the manifest was built from. It
 refuses to build if the release gate did not pass.
 
 ```bash
@@ -259,7 +266,8 @@ Signing is Ed25519 over the canonical bytes, verified offline with the committed
 key, which is the reason it was chosen over cosign for air-gapped sites ([ADR-0007](docs/adr/ADR-0007-signed-releases.md)).
 It proves the manifest bytes were not altered and records the gate that authorised them.
 It does **not** prove the weights match the revision, nor who signed: that needs the key in
-an HSM/KMS and digest-pinned images, both named as conditions in the acceptance record.
+an HSM/KMS and an attestation that the published image was built from this tree, both named
+as conditions in the acceptance record.
 
 The review pack answers the questions a reviewer actually asks, in order:
 
@@ -267,7 +275,7 @@ The review pack answers the questions a reviewer actually asks, in order:
 |---|---|
 | [requirements.md](docs/signoff/requirements.md) | What was asked, requirement by requirement, and which ones are not met |
 | [c4.md](docs/architecture/c4.md) | What the system is: L1–L4 views, runtime sequence, trust boundaries |
-| [acceptance.md](docs/signoff/acceptance.md) | What was verified (A-01…A-21), what was not (N-01…N-11), and the conditions (C-01…C-10) |
+| [acceptance.md](docs/signoff/acceptance.md) | What was verified (A-01…A-22), what was not (N-01…N-11), and the conditions (C-01…C-10) |
 | [threat-model.md](docs/signoff/threat-model.md) | What can go wrong, by asset, actor and entry point |
 | [risks.md](docs/signoff/risks.md) | Which risks are accepted, with anchors into the code |
 | [operations.md](docs/signoff/operations.md) | How it runs: SLOs, alerts, runbooks, backups |
@@ -893,7 +901,7 @@ release cannot produce a manifest at all, because a "signed record of a failed g
 forensic artifact that belongs in the CI log, not in the registry next to passing releases.
 
 **The review pack states what is missing.** Requirements are mapped one by one with explicit
-`Not demonstrated` and `N/A` statuses; acceptance lists N-01…N-11 beside A-01…A-21; each
+`Not demonstrated` and `N/A` statuses; acceptance lists N-01…N-11 beside A-01…A-22; each
 verdict points at the risk it accepts. A sign-off that only lists successes is not a
 sign-off, it is marketing.
 

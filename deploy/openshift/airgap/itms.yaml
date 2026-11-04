@@ -10,12 +10,12 @@ spec:
     - source: docker.io/vllm/vllm-openai
       mirrors: [mirror.internal.example/vllm/vllm-openai]
       mirrorSourcePolicy: NeverContactSource
-    - source: docker.io/slm/gateway
-      mirrors: [mirror.internal.example/slm/gateway]
+    - source: ghcr.io/mahi80/slm-gateway
+      mirrors: [mirror.internal.example/ghcr.io/mahi80/slm-gateway]
       mirrorSourcePolicy: NeverContactSource
-    - source: docker.io/slm/tiersim
-      mirrors: [mirror.internal.example/slm/tiersim]
+    - source: ghcr.io/mahi80/slm-tiersim
+      mirrors: [mirror.internal.example/ghcr.io/mahi80/slm-tiersim]
       mirrorSourcePolicy: NeverContactSource
-    - source: docker.io/slm/eval
-      mirrors: [mirror.internal.example/slm/eval]
+    - source: ghcr.io/mahi80/slm-eval
+      mirrors: [mirror.internal.example/ghcr.io/mahi80/slm-eval]
       mirrorSourcePolicy: NeverContactSource

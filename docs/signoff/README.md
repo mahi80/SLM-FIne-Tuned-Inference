@@ -58,7 +58,9 @@ GPU, and `make test` / `make release-check` run without a cluster.
    rebuilt and re-signed.
 3. **Static validation is not deployment validation.** Manifests render and pass policy
    checks; a kind cluster then applied the vanilla overlay and exercised Kyverno and Argo,
-   which is recorded as observed evidence (A-17 to A-21). No OpenShift cluster was
+   which is recorded as observed evidence (A-17 to A-21). The image supply chain is
+   separately evidenced: CI publishes the first-party images and every overlay renders by
+   digest (A-22). No OpenShift cluster was
    available, so every OpenShift claim is marked *static* and the gap is risk
    [R-09](risks.md#r-09--no-live-openshift-validation).
 4. **The signer is a demo key in this repository's threat model.** The private key is

@@ -47,7 +47,7 @@ document names what crosses them and what would happen if it did.
 |---|---|---|---|---|
 | **S**poofing | Stolen bearer key impersonates a tenant | B1 → gateway | Constant-time comparison; per-tenant quotas and allowlists limit blast radius | No expiry or binding to a workload — [R-04](risks.md#r-04--static-bearer-keys) |
 | **S**poofing | Rogue pod calls vLLM directly, bypassing gateway | In-namespace | NetworkPolicy allows only `gateway` to `vllm-gpu:8000` | No cryptographic identity — [R-05](risks.md#r-05--no-in-cluster-mtls) |
-| **S**poofing | Replaced image under the same tag | Registry → node | Pinned tags; admission rejects `latest`; signed manifest names the tag | Tag immutability is not guaranteed — [R-02](risks.md#r-02--images-pinned-by-tag-not-digest) |
+| **S**poofing | Replaced image under the same tag | Registry → node | Manifests pin digests and the signed manifest records them; admission rejects `latest` | Registry or mirror compromise is still trusted — [R-03](risks.md#r-03--upstream-artifact-compromise) |
 | **T**ampering | Edit, delete or reorder audit records | Audit volume | sha256 chain with `prev` links; startup verification refuses a broken chain; `/v1/audit/verify` | Writer can rewrite the whole chain — [R-01](risks.md#r-01--audit-chain-is-evidence-not-prevention) |
 | **T**ampering | Change policy without review | Git / ConfigMap | Policy is generated from `config/policy.yaml`; hash rolls the gateway; validator asserts byte equality | Admin can edit policy in-cluster or merge a bad PR — [R-07](risks.md#r-07--tenant-policy-misconfiguration) |
 | **T**ampering | Swap adapter weights after signing | Adapter PVC | Manifest pins the adapter tree digest; `make release-check` re-hashes local artifacts | No runtime digest check at load time, and artifacts are outside the cluster's provenance — [R-13](risks.md#r-13--adapter-artifacts-are-not-committed) |
@@ -92,7 +92,7 @@ subsequent hash, or compromising the gateway process. The former leaves no local
 an externally anchored head hash would reveal it (C-04).
 
 **Goal: run code in the model pod.**
-Requires a malicious image (blocked by pinned tags and admission, weakened by R-02), a
+Requires a malicious image (pinned by digest and admission; provenance remains R-03), a
 supply-chain compromise (R-03), or an exploit in vLLM's HTTP surface — which is the largest
 unscanned attack surface in the design and the reason C-09 exists.
 

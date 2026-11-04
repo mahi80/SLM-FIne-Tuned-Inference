@@ -116,8 +116,8 @@ Three properties from earlier phases made the deployment design non-obvious:
 - `python tools/validate_deploy.py` passes all three: image pins, model revision, security
   contexts, resources, probes, Service/policy wiring, ConfigMap equality, single-replica
   gateway, no Secrets, namespace placement, overlay-specific exposure.
-- 19 deployment tests (synthetic negative cases plus rendered-overlay integration); the
-  full suite is 106 tests.
+- 22 deployment tests (synthetic negative cases plus rendered-overlay integration); the
+  full suite is 112 tests.
 - A kind v0.33.0 cluster applied the vanilla overlay (25 objects, gateway and both
   simulators running), evaluated the Kyverno policies in Enforce, and reconciled the
   policies Application with self-heal. That pass found a nested `subPath` mount that static
@@ -132,9 +132,11 @@ Three properties from earlier phases made the deployment design non-obvious:
   enforce NetworkPolicy and has no ingress controller, so those paths remain declarative.
   Argo CD v3 removed the per-Application `kustomize.buildOptions` field; the build flag now
   lives in `argocd-cm` and an Application that carries the old field is rejected at decode.
-- **Images are pinned by tag, not digest.** `vllm/vllm-openai:v0.33.0` is the Phase 0
-  runtime tag; production should rewrite tags to digests at promotion. The validator
-  accepts either.
+- **Images are pinned by digest.** `vllm/vllm-openai:v0.33.0` and the first-party images
+  carry `@sha256:` references in the base, and the signed manifest records the same digests.
+  The tag is kept for readability. First-party images are published from this repository to
+  public GHCR packages by `.github/workflows/images.yml`; no cluster has pulled them yet.
+  Provenance (who built the image) is still trusted, not attested (C-09).
 - **Storage classes are not named.** PVCs rely on the cluster default. A real install
   patches the storage class and, for the model cache, sizes to the chosen weights.
 - **The in-cluster release gate verifies, it does not auto-rollback.** A failed PostSync

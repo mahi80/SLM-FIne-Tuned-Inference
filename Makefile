@@ -63,10 +63,10 @@ eval-gate: ## Score the candidate and enforce floors plus drift
 cost: ## Compute ownership cost per million output tokens
 	PYTHONPATH=src python -m cost
 
-deploy-images: ## Build the images the cluster manifests reference
-	docker build -f docker/gateway.Dockerfile -t slm/gateway:0.5.0 .
-	docker build -f docker/tiersim.Dockerfile -t slm/tiersim:0.5.0 .
-	docker build -f docker/eval.Dockerfile -t slm/eval:0.5.0 .
+deploy-images: ## Build local copies of the first-party images (the cluster runs the CI digests)
+	docker build -f docker/gateway.Dockerfile -t ghcr.io/mahi80/slm-gateway:0.5.0 .
+	docker build -f docker/tiersim.Dockerfile -t ghcr.io/mahi80/slm-tiersim:0.5.0 .
+	docker build -f docker/eval.Dockerfile -t ghcr.io/mahi80/slm-eval:0.5.0 .
 
 deploy-render: ## Render the three Kustomize overlays into deploy/rendered/
 	@mkdir -p deploy/rendered

@@ -1,8 +1,9 @@
 # Release process
 
-A release is a signed statement of six things: model revision, adapter digests, image tags,
-policy version, gate result, and the benchmark/cost evidence used to justify promotion. The
-process below is what produces and consumes that statement.
+A release is a signed statement of six things: model revision, adapter digests, image
+digests (with tags for readability), policy version, gate result, and the benchmark/cost
+evidence used to justify promotion. The process below is what produces and consumes that
+statement.
 
 ## Roles
 
@@ -133,8 +134,9 @@ the committed public key; the signed values describe the artifacts that are depl
 (`make release-check` binds all three).
 
 **Does not prove:** that the builder was honest, that the gate was run on the same hardware,
-that the private key was not copied, or that the image on the registry is what the tag
-points to (tags, not digests, are pinned — [R-02](risks.md#r-02--images-pinned-by-tag-not-digest)).
+that the private key was not copied, or that the image the digest names was built from this
+tree (pinning fixes the bytes, not their provenance — [R-03](risks.md#r-03--upstream-artifact-compromise);
+registry retention is [R-02](risks.md#r-02--image-digests-depend-on-registry-retention)).
 
 A Sigstore/cosign + in-toto attestation would close the identity and transparency gaps. It
 was rejected for this build because it adds a CA dependency, network access to a transparency

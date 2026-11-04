@@ -21,10 +21,10 @@ Python 3.12, OpenSSL 3.5, `kubectl` v1.34.1, kind v0.33.0 on Docker Desktop.
 | A-08 | Tier throughput and latency are measured, not estimated | `make bench` | GPU 125.5 / 484.8 / 1,123.2 output tok/s at c=1/4/12 | Measured |
 | A-09 | CPU and cloud tiers are calibrated simulators | `make bench` | CPU saturates ~122 tok/s; every response `x-simulated: true` | MODELLED |
 | A-10 | Ownership cost is separated from per-token price | `make cost` | $0.117/1M at capacity, $2.24/1M at 20k req/day, break-even ≈ 56k/day | Measured throughput, stated prices |
-| A-11 | Router, eval, cost, deployment and release logic are unit tested | `make test` | 106 tests, 0 failures, stdlib `unittest` | Measured |
+| A-11 | Router, eval, cost, deployment and release logic are unit tested | `make test` | 112 tests, 0 failures, stdlib `unittest` | Measured |
 | A-12 | Three overlays render and pass static checks | `make deploy-validate` | openshift 32, vanilla 25, airgap 31 objects; no errors | Static |
-| A-13 | A signed release matches the deployment tree | `make release-check` | manifest signature verified; policy, images, revision, adapter set and gate all agree | Measured |
-| A-14 | Secrets are not in Git; workloads are non-root with limits and probes | `make deploy-validate`, `tests/test_deploy.py` | no `Secret` objects rendered; 19 deployment tests pass | Static |
+| A-13 | A signed release matches the deployment tree | `make release-check` | manifest signature verified; policy, image names, tags and digests, revision, adapter set and gate all agree | Measured |
+| A-14 | Secrets are not in Git; workloads are non-root with limits and probes | `make deploy-validate`, `tests/test_deploy.py` | no `Secret` objects rendered; 22 deployment tests pass | Static |
 | A-15 | Air gap removes internet egress and forces offline mode | `make deploy-validate` | model-download NetworkPolicy absent; `HF_HUB_OFFLINE=1` present | Static |
 | A-16 | CI runs the tests and both validators on a hosted runner | GitHub Actions run `41875084383` on `31b4a7c` | unit tests, `validate_deploy`, `validate_release` and `registry verify` all passed | Measured (hosted), no cluster |
 | A-17 | The vanilla overlay runs on a real API server and kubelet | `kubectl kustomize --load-restrictor LoadRestrictionsNone deploy/kustomize/overlays/vanilla \| kubectl apply -f -`; kind v0.33.0, Kubernetes 1.34 | 25 objects applied; gateway and both tier simulators 1/1; GPU tier left unschedulable by a node taint; the first apply exposed a nested `subPath` mount on the tenants Secret, now fixed and covered by `check_mounts` | Measured on kind |
@@ -32,6 +32,7 @@ Python 3.12, OpenSSL 3.5, `kubectl` v1.34.1, kind v0.33.0 on Docker Desktop.
 | A-19 | The audit chain verifies against the PVC-backed file | `GET /v1/audit/verify` as admin | `{"ok": true, "records": 7, "last_seq": 7, ...}`; the file's last record hash equals the in-memory head | Measured on kind |
 | A-20 | Kyverno Enforce rejects non-compliant pods and admits a compliant one | `kubectl apply` of four synthetic pods | missing readiness probe → `slm-require-probes`; `nginx:latest` → `slm-require-pinned-images`; PSS-compliant pod with probe admitted | Measured on kind (Kyverno v1.19.2) |
 | A-21 | Argo CD reconciles Applications and self-heals drift | temp Application at the vanilla overlay; patch and delete a managed ClusterPolicy | `slm-policies` Synced/Healthy/Succeeded over 6 policies; a drifted field restored in ~6 s and a deleted policy recreated in <3 s; `slm-platform` applied waves 0–2 and waits on the unschedulable GPU tier | Measured on kind (Argo CD v3.6.1) |
+| A-22 | Every workload image is pinned by digest and the signed release records the same digests | `kubectl kustomize --load-restrictor LoadRestrictionsNone deploy/kustomize/overlays/openshift \| grep image:`; images workflow run `41935648483`; `make release-check` | all four images render as `name:tag@sha256:…`; CI published the three first-party images to public GHCR packages and the manifest pins the same digests (gateway `16759fe6…`, tiersim `33b9b3ff…`, eval `137d10b4…`) plus upstream vLLM `d825baf9…`; anonymous registry lookups returned those digests; a tag-only or mismatched image fails `check_images`/`check_rendered` | Measured (hosted CI + registry); no cluster pulled the GHCR images |
 
 Reproducible artifacts for each row are under [`bench/results/`](../../bench/results) and
 the test suite; [evidence.json](evidence.json) records their hashes and the commit.
@@ -60,7 +61,7 @@ risk accepted for the reference build, not an oversight.
 | # | Condition | Closes | Evidence required |
 |---|---|---|---|
 | C-01 | Install on a real OpenShift cluster: Kyverno in Enforce, Argo CD synced, Route TLS verified, ServiceMonitor scraping | R-09, N-01–N-04 | `oc get route`, admission denial tests, Argo sync history, Grafana panels populated |
-| C-02 | Pin images by digest, not tag, in manifests and the release manifest | R-02 | Rendered images contain `@sha256:`; digest matches the signed manifest |
+| C-02 | ~~Pin images by digest, not tag, in manifests and the release manifest~~ **Closed** | R-02 | A-22: rendered images carry `@sha256:`; the signed manifest records the same digests; the validator rejects tag-only references |
 | C-03 | Replace static bearer keys with OIDC / short-lived credentials; rotate the release key | R-04 | Tenant auth failure and rotation rehearsal recorded |
 | C-04 | Ship the audit head hash to a WORM or append-only sink outside the cluster | R-01 | Object-lock or equivalent retention policy; restore test |
 | C-05 | Move quota, breaker and audit state to a shared store, or accept single-replica and document the maintenance window | R-08 | Replica-2 test proving no quota bypass and no chain fork |
@@ -78,7 +79,7 @@ risk accepted for the reference build, not an oversight.
 | Date | 2026-11-04 |
 | Platform release | latest manifest under [`release/`](../../release) |
 | Evidence snapshot | [evidence.json](evidence.json) |
-| Decision | **Accepted as reference architecture, conditions C-01 to C-10 open** |
+| Decision | **Accepted as reference architecture, C-02 closed; C-01 and C-03 to C-10 open** |
 | Reviewer | Platform architecture (author) |
 | Independent reviewer | *not yet assigned* |
 

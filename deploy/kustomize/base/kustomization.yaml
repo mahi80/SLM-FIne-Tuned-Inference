@@ -31,13 +31,22 @@ configMapGenerator:
       labels:
         app.kubernetes.io/part-of: slm-fabric
 
+# Digests, not tags, are what the cluster runs. The tag stays for humans and
+# because a digest alone gives no clue which release a pod is on; the validator
+# and the signed manifest check both. First-party images are published from
+# this repository, and their digests are minted by the images workflow.
 images:
   - name: vllm/vllm-openai
     newTag: v0.33.0
+    digest: sha256:d825baf9ce4b1b6bfc5ecc7b79880c7e6748c65a72d697ce3d47607aafa84c6e
   - name: slm/gateway
+    newName: ghcr.io/mahi80/slm-gateway
     newTag: "0.5.0"
+    digest: sha256:16759fe6fd4febc6d88509283cfe34f69fd29d3eaf0b3671911cf1a6f587ebdf
   - name: slm/tiersim
+    newName: ghcr.io/mahi80/slm-tiersim
     newTag: "0.5.0"
+    digest: sha256:33b9b3ff3b9228b43057f58526bb350ea899b6088dbcf535cad75247db845197
 
 labels:
   - pairs:

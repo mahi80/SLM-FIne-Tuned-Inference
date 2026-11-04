@@ -58,7 +58,9 @@ def release_config():
             "served_name": "slm-small",
             "quantization": "awq-w4a16",
         },
-        "images": [{"name": "slm/gateway", "tag": "1.2.3"}],
+        "images": [
+            {"name": "slm/gateway", "tag": "1.2.3", "digest": "sha256:" + "a" * 64}
+        ],
         "adapters": [{"name": "a1", "served_name": "a1"}],
         "policy": "config/policy.yaml",
         "gate": {
@@ -242,6 +244,11 @@ class ValidationTests(unittest.TestCase):
         manifest["images"][0]["tag"] = "latest"
         self.assertTrue(any("not pinned" in p for p in validate_manifest(manifest)))
 
+    def test_image_without_digest_is_rejected(self):
+        manifest = self.base()
+        del manifest["images"][0]["digest"]
+        self.assertTrue(any("not pinned by digest" in p for p in validate_manifest(manifest)))
+
     def test_missing_revision_is_rejected(self):
         manifest = self.base()
         del manifest["model"]["revision"]
@@ -320,8 +327,8 @@ class CommittedReleaseTests(unittest.TestCase):
         self.assertEqual(manifest["release_id"], config["release_id"])
         self.assertEqual(manifest["model"]["revision"], config["model"]["revision"])
         self.assertEqual(
-            [(i["name"], i["tag"]) for i in manifest["images"]],
-            [(i["name"], str(i["tag"])) for i in config["images"]],
+            [(i["name"], i["tag"], i["digest"]) for i in manifest["images"]],
+            [(i["name"], str(i["tag"]), i["digest"]) for i in config["images"]],
         )
         self.assertEqual(
             [a["name"] for a in manifest["adapters"]],

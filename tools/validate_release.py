@@ -36,9 +36,9 @@ from tools.validate_deploy import (
     containers,
     find,
     label,
+    parse_image,
     pod_spec,
     render_overlay,
-    split_image,
     workloads,
 )
 
@@ -65,8 +65,8 @@ def check_config(manifest: dict, config: dict) -> list[str]:
         )
     if manifest.get("model") != config.get("model"):
         errors.append("config/release.yaml model block differs from the signed manifest")
-    declared = [(i["name"], str(i["tag"])) for i in manifest.get("images") or []]
-    configured = [(i["name"], str(i["tag"])) for i in config.get("images") or []]
+    declared = [(i["name"], str(i["tag"]), str(i.get("digest", ""))) for i in manifest.get("images") or []]
+    configured = [(i["name"], str(i["tag"]), str(i.get("digest", ""))) for i in config.get("images") or []]
     if declared != configured:
         errors.append(f"config images {configured} differ from the signed manifest {declared}")
     adapters = [(a["name"], a.get("served_name")) for a in manifest.get("adapters") or []]
@@ -134,22 +134,30 @@ def check_adapters(manifest: dict, repo: Path) -> tuple[list[str], list[str]]:
 
 def check_rendered(overlay: str, docs: list[dict], manifest: dict) -> list[str]:
     errors = []
-    declared = {image["name"]: str(image["tag"]) for image in manifest.get("images") or []}
+    declared = {
+        image["name"]: (str(image["tag"]), str(image.get("digest", "")))
+        for image in manifest.get("images") or []
+    }
 
     for doc in workloads(docs):
         for container in containers(pod_spec(doc)):
             image = container.get("image")
             if not image:
                 continue
-            name, ref = split_image(image)
-            if ref and ref.startswith("@"):
-                continue  # a digest is stronger than the tag the manifest pins
+            name, tag, digest = parse_image(image)
             if name not in declared:
                 errors.append(f"{overlay}: {label(doc)} uses undeclared image {image}")
-            elif ref != declared[name]:
+                continue
+            signed_tag, signed_digest = declared[name]
+            if digest != signed_digest:
+                errors.append(
+                    f"{overlay}: {label(doc)} runs {image}, signed release pins "
+                    f"{name}@{signed_digest}"
+                )
+            elif tag != signed_tag:
                 errors.append(
                     f"{overlay}: {label(doc)} runs {image}, signed release declares "
-                    f"{name}:{declared[name]}"
+                    f"{name}:{signed_tag}"
                 )
 
     vllm = find(docs, "Deployment", "vllm-gpu")

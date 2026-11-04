@@ -7,7 +7,7 @@ Each entry says what exists today, what is left after mitigation, and which cond
 | ID | Risk | Likelihood | Impact | Severity | Closes with |
 |---|---|---|---|---|---|
 | [R-01](#r-01--audit-chain-is-evidence-not-prevention) | Audit chain is tamper-evident, not tamper-proof | Medium | High | **High** | C-04 |
-| [R-02](#r-02--images-pinned-by-tag-not-digest) | Images and runtime pinned by tag, not digest | Medium | High | **High** | C-02 |
+| [R-02](#r-02--image-digests-depend-on-registry-retention) | A registry can lose or withhold a pinned digest | Low | Medium | **Medium** | C-02 (closed) |
 | [R-03](#r-03--upstream-artifact-compromise) | Pinned upstream artifact is compromised | Low | High | **High** | C-02 |
 | [R-04](#r-04--static-bearer-keys) | Static bearer keys, no rotation or OIDC | Medium | High | **High** | C-03 |
 | [R-05](#r-05--no-in-cluster-mtls) | No mTLS between gateway and tiers | Low | Medium | Medium | C-01 |
@@ -37,29 +37,33 @@ every hash. There is no external anchor.
 **Closure.** Ship the head hash per interval to an object-lock bucket or append-only syslog
 and verify against it (C-04). The gateway already exposes the head at `/v1/audit/verify`.
 
-### R-02 — Images pinned by tag, not digest
+### R-02 — Image digests depend on registry retention
 
-**What exists.** Kustomize sets exact tags (`vllm/vllm-openai:v0.33.0`, `slm/*:0.5.0`) and
-the admission policy rejects `latest`. The release manifest records tags, not registry
-digests.
+**What exists.** All four workload images are pinned by digest in the Kustomize base and in
+the signed manifest: upstream `vllm/vllm-openai:v0.33.0@sha256:d825baf9…`, and the three
+first-party images `ghcr.io/mahi80/slm-{gateway,tiersim,eval}:0.5.0@sha256:…`, published
+from this repository by the images workflow. `validate_deploy` rejects a tag-only or
+malformed digest, and `validate_release` compares the rendered digest with the signed one.
+The admission policy still rejects `latest`.
 
-**Residual.** A registry tag can be moved. An image rebuilt under the same tag would pass
-every check while differing from what was tested.
+**Residual.** A digest proves which bytes are requested, not who produced them. If the
+registry withdraws the manifest, pulls fail loudly rather than silently changing; serving
+different bytes under the same digest would require breaking SHA-256. The public GHCR
+packages and the upstream registry remain trusted third parties (see R-03).
 
-**Closure.** Resolve digests at release time and pin them in the rendered manifests; extend
-the admission policy to require `@sha256:` (C-02). The validator already treats digest
-references as stronger than tags, so the change is additive.
+**Closure.** C-02 is closed by A-22. Adding image signatures or attestations and a scanning
+proxy remains C-09.
 
 ### R-03 — Upstream artifact compromise
 
-**What exists.** Model revision and runtime tag are pinned; the air-gap mirror has an
-auditable image list.
+**What exists.** Model revision and runtime tag are pinned; every image is pinned by digest
+too, and the air-gap mirror has an auditable image list.
 
 **Residual.** Pinning proves immutability, not provenance. A compromised upstream repository
 serving different bytes for a pinned revision is not detected locally.
 
 **Closure.** Verify the model snapshot hash against an independently obtained manifest and
-mirror images through a scanning proxy (C-02, C-09).
+mirror images through a scanning proxy (C-09).
 
 ### R-04 — Static bearer keys
 
@@ -131,7 +135,7 @@ the single replica is the honest design.
 
 ### R-09 — No live OpenShift validation
 
-**What exists.** Three overlays render and pass 60+ static assertions; 19 deployment tests
+**What exists.** Three overlays render and pass 60+ static assertions; 22 deployment tests
 cover the failure modes that matter; Kyverno policies and Argo CD applications are committed.
 A kind v0.33.0 cluster then applied the vanilla overlay, admitted and rejected pods through
 Kyverno v1.19.2, reconciled two Applications with Argo CD v3.6.1, and found one real defect

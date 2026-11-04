@@ -90,14 +90,15 @@ Three constraints shaped the answer:
 - Tamper tests: changing one value in the manifest, removing the signature, or changing an
   adapter digest each fail verification. Reformatting the JSON does not.
 - `python -m tools.validate_release`: `OK release slm-0.5.0 = signed manifest = 3 overlays`.
-- Drift tests: an image tag, model revision, served name, adapter name, policy digest, gate
-  model or compose revision that differs from the manifest is rejected.
-- 38 registry/release tests and 106 total unit tests pass without a cluster or GPU.
+- Drift tests: an image tag or digest, model revision, served name, adapter name, policy
+  digest, gate model or compose revision that differs from the manifest is rejected.
+- 41 registry/release tests and 112 total unit tests pass without a cluster or GPU.
 
 **Costs accepted**
 
-- The manifest pins **tags, not digests** (risk R-02). Moving a registry tag can invalidate
-  the binding without breaking a signature. Closing this is condition C-02.
+- The manifest pins **digests**, but a digest proves bytes, not provenance (risks R-02 and
+  R-03). A registry can withhold a manifest, and an image built from a compromised context
+  still hashes consistently. Image attestations and scanning remain C-09.
 - There is **no transparency log and no identity**. The committed key proves consistency, not
   who signed. Key custody is a documented procedure (R-04), not an enforced one.
 - Rebuilding a release requires **retraining the adapter** — training is not bit-reproducible
