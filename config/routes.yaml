@@ -1,0 +1,17 @@
+# Static alias table for Phase 1. Phase 3 replaces this file with policy
+# evaluation, keeping the same alias contract for clients.
+version: 1
+
+routes:
+  slm-small:
+    tier: gpu
+    backend: http://vllm-gpu:8000
+    upstream_model: slm-small
+    fallback: slm-small-cpu
+    description: "Qwen3-4B AWQ W4A16 on the GPU tier (measured)"
+
+  slm-small-cpu:
+    tier: cpu
+    backend: http://tiersim-cpu:8001
+    upstream_model: slm-small
+    description: "Xeon-class CPU tier (MODELLED - calibrated simulator)"

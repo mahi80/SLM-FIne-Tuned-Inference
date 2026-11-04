@@ -53,5 +53,88 @@ services:
               count: 1
               capabilities: [gpu]
 
+  # CPU tier. Simulated: timing follows a calibrated Xeon profile, output is
+  # canned. Every response is tagged x-simulated: true.
+  tiersim-cpu:
+    build:
+      context: .
+      dockerfile: docker/tiersim.Dockerfile
+    restart: unless-stopped
+    environment:
+      TIERSIM_PROFILE: ${TIERSIM_PROFILE:-cpu-xeon-4b}
+      TIERSIM_MODEL_NAME: ${SERVED_MODEL_NAME:-slm-small}
+      TIERSIM_SPEEDUP: ${TIERSIM_SPEEDUP:-1}
+    ports:
+      - "${TIERSIM_PORT:-8011}:8001"
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3)"
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  gateway:
+    build:
+      context: .
+      dockerfile: docker/gateway.Dockerfile
+    restart: unless-stopped
+    environment:
+      ROUTES_FILE: /app/config/routes.yaml
+      TENANTS_FILE: /app/config/tenants.yaml
+    volumes:
+      - ./config:/app/config:ro
+    ports:
+      - "${GATEWAY_PORT:-8020}:8000"
+    depends_on:
+      tiersim-cpu:
+        condition: service_healthy
+      vllm-gpu:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  prometheus:
+    image: prom/prometheus:v3.15.1
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prom-data:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    depends_on:
+      - gateway
+      - tiersim-cpu
+
+  grafana:
+    image: grafana/grafana:13.2.5
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+    volumes:
+      - ./deploy/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_PORT:-3001}:3000"
+    depends_on:
+      - prometheus
+
 volumes:
   hf-cache:
+  prom-data:
+  grafana-data:

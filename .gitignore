@@ -1,4 +1,5 @@
 .env
+config/tenants.yaml
 .venv/
 __pycache__/
 *.py[cod]

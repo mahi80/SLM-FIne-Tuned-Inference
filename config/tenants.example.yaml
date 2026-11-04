@@ -1,0 +1,11 @@
+# Development tenants only. `make env` copies this to tenants.yaml, which is
+# gitignored. Replace every key before the gateway is reachable from anywhere
+# other than localhost; Phase 3 moves these into the policy store.
+tenants:
+  - id: acme
+    api_key: dev-acme-key
+    rpm: 120
+
+  - id: globex
+    api_key: dev-globex-key
+    rpm: 30
