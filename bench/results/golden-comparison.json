@@ -1,0 +1,414 @@
+{
+  "golden": "src/eval/golden.jsonl",
+  "golden_sha256": "747ffd5dab7783db1b0e2c2e880f7ef62fb5594283af09f6d40e8693262d531d",
+  "base_url": "http://localhost:8010",
+  "n": 24,
+  "gates": "config/eval-gates.yaml",
+  "started_at": 1793799523,
+  "models": [
+    {
+      "model": "slm-small",
+      "n": 24,
+      "errors": 0,
+      "strict_json_rate": 1.0,
+      "lenient_json_rate": 1.0,
+      "schema_rate": 1.0,
+      "exact_labels_rate": 0.042,
+      "field_accuracy": {
+        "category": 0.708,
+        "priority": 0.542,
+        "sentiment": 0.75,
+        "escalate": 0.75,
+        "product": 0.458
+      },
+      "summary_ok_rate": 1.0,
+      "slices": {
+        "clean": {
+          "n": 8,
+          "schema": 1.0,
+          "exact": 0.0
+        },
+        "hard": {
+          "n": 8,
+          "schema": 1.0,
+          "exact": 0.0
+        },
+        "held-out": {
+          "n": 8,
+          "schema": 1.0,
+          "exact": 0.125
+        }
+      },
+      "invalid_counts": {
+        "labels": 24
+      },
+      "mismatches": [
+        {
+          "id": "clean-billing-duplicate",
+          "slice": "clean",
+          "fields": [
+            "priority",
+            "escalate",
+            "product"
+          ],
+          "got": {
+            "priority": "P2",
+            "escalate": true,
+            "product": "FlowCore 3"
+          }
+        },
+        {
+          "id": "clean-billing-invoice-copy",
+          "slice": "clean",
+          "fields": [
+            "product"
+          ],
+          "got": {
+            "product": "invoice"
+          }
+        },
+        {
+          "id": "clean-tech-modbus",
+          "slice": "clean",
+          "fields": [
+            "category",
+            "sentiment"
+          ],
+          "got": {
+            "category": "account",
+            "sentiment": "positive"
+          }
+        },
+        {
+          "id": "clean-tech-vibration",
+          "slice": "clean",
+          "fields": [
+            "priority",
+            "sentiment"
+          ],
+          "got": {
+            "priority": "P2",
+            "sentiment": "neutral"
+          }
+        },
+        {
+          "id": "clean-shipping-delay",
+          "slice": "clean",
+          "fields": [
+            "sentiment"
+          ],
+          "got": {
+            "sentiment": "neutral"
+          }
+        },
+        {
+          "id": "clean-cancel-plan",
+          "slice": "clean",
+          "fields": [
+            "category",
+            "product"
+          ],
+          "got": {
+            "category": "account",
+            "product": "FlowCore 3"
+          }
+        },
+        {
+          "id": "clean-billing-thanks",
+          "slice": "clean",
+          "fields": [
+            "priority"
+          ],
+          "got": {
+            "priority": "P3"
+          }
+        },
+        {
+          "id": "clean-account-admin",
+          "slice": "clean",
+          "fields": [
+            "category",
+            "product"
+          ],
+          "got": {
+            "category": "technical",
+            "product": "Vantage 5 analyzer portal"
+          }
+        },
+        {
+          "id": "hard-sarcasm",
+          "slice": "hard",
+          "fields": [
+            "priority",
+            "sentiment",
+            "escalate"
+          ],
+          "got": {
+            "priority": "P3",
+            "sentiment": "positive",
+            "escalate": false
+          }
+        },
+        {
+          "id": "hard-mixed-language",
+          "slice": "hard",
+          "fields": [
+            "priority"
+          ],
+          "got": {
+            "priority": "P1"
+          }
+        },
+        {
+          "id": "hard-multi-issue",
+          "slice": "hard",
+          "fields": [
+            "priority",
+            "escalate"
+          ],
+          "got": {
+            "priority": "P2",
+            "escalate": true
+          }
+        },
+        {
+          "id": "hard-angry-manual",
+          "slice": "hard",
+          "fields": [
+            "category",
+            "priority",
+            "escalate"
+          ],
+          "got": {
+            "category": "account",
+            "priority": "P3",
+            "escalate": true
+          }
+        },
+        {
+          "id": "hard-missing-product",
+          "slice": "hard",
+          "fields": [
+            "sentiment",
+            "product"
+          ],
+          "got": {
+            "sentiment": "neutral",
+            "product": "packaging cell"
+          }
+        },
+        {
+          "id": "hard-calm-outage",
+          "slice": "hard",
+          "fields": [
+            "priority",
+            "product"
+          ],
+          "got": {
+            "priority": "P1",
+            "product": "FlowCore 3"
+          }
+        },
+        {
+          "id": "hard-feature-request",
+          "slice": "hard",
+          "fields": [
+            "category"
+          ],
+          "got": {
+            "category": "account"
+          }
+        },
+        {
+          "id": "hard-security-account",
+          "slice": "hard",
+          "fields": [
+            "category",
+            "product"
+          ],
+          "got": {
+            "category": "technical",
+            "product": "GateLink"
+          }
+        },
+        {
+          "id": "heldout-data-question",
+          "slice": "held-out",
+          "fields": [
+            "priority",
+            "product"
+          ],
+          "got": {
+            "priority": "P3",
+            "product": "ThermoQ"
+          }
+        },
+        {
+          "id": "heldout-near-miss",
+          "slice": "held-out",
+          "fields": [
+            "priority",
+            "sentiment"
+          ],
+          "got": {
+            "priority": "P2",
+            "sentiment": "neutral"
+          }
+        },
+        {
+          "id": "heldout-damaged-shipment",
+          "slice": "held-out",
+          "fields": [
+            "category",
+            "escalate",
+            "product"
+          ],
+          "got": {
+            "category": "technical",
+            "escalate": true,
+            "product": "GateLink"
+          }
+        },
+        {
+          "id": "heldout-refund-chase",
+          "slice": "held-out",
+          "fields": [
+            "priority",
+            "escalate",
+            "product"
+          ],
+          "got": {
+            "priority": "P2",
+            "escalate": true,
+            "product": "invoice 64102"
+          }
+        },
+        {
+          "id": "heldout-licence-transfer",
+          "slice": "held-out",
+          "fields": [
+            "product"
+          ],
+          "got": {
+            "product": "Vantage 5"
+          }
+        },
+        {
+          "id": "heldout-multi-site-outage",
+          "slice": "held-out",
+          "fields": [
+            "product"
+          ],
+          "got": {
+            "product": "FlowCore 3"
+          }
+        },
+        {
+          "id": "heldout-payment-lockout",
+          "slice": "held-out",
+          "fields": [
+            "product"
+          ],
+          "got": {
+            "product": "Vantage 5"
+          }
+        }
+      ],
+      "failures": []
+    },
+    {
+      "model": "triage-v1",
+      "n": 24,
+      "errors": 0,
+      "strict_json_rate": 1.0,
+      "lenient_json_rate": 1.0,
+      "schema_rate": 0.917,
+      "exact_labels_rate": 0.75,
+      "field_accuracy": {
+        "category": 0.875,
+        "priority": 0.833,
+        "sentiment": 0.875,
+        "escalate": 0.833,
+        "product": 0.917
+      },
+      "summary_ok_rate": 0.917,
+      "slices": {
+        "clean": {
+          "n": 8,
+          "schema": 1.0,
+          "exact": 1.0
+        },
+        "hard": {
+          "n": 8,
+          "schema": 0.75,
+          "exact": 0.625
+        },
+        "held-out": {
+          "n": 8,
+          "schema": 1.0,
+          "exact": 0.625
+        }
+      },
+      "invalid_counts": {
+        "labels": 22,
+        "schema": 2
+      },
+      "mismatches": [
+        {
+          "id": "hard-sarcasm",
+          "slice": "hard",
+          "fields": [
+            "sentiment",
+            "escalate"
+          ],
+          "got": {
+            "sentiment": "positive",
+            "escalate": false
+          }
+        },
+        {
+          "id": "heldout-refund-chase",
+          "slice": "held-out",
+          "fields": [
+            "escalate"
+          ],
+          "got": {
+            "escalate": true
+          }
+        },
+        {
+          "id": "heldout-licence-transfer",
+          "slice": "held-out",
+          "fields": [
+            "category",
+            "priority"
+          ],
+          "got": {
+            "category": "cancellation",
+            "priority": "P3"
+          }
+        },
+        {
+          "id": "heldout-multi-site-outage",
+          "slice": "held-out",
+          "fields": [
+            "priority"
+          ],
+          "got": {
+            "priority": "P2"
+          }
+        }
+      ],
+      "failures": [
+        {
+          "id": "hard-angry-manual",
+          "raw": "{\"category\": \"documentation\", \"priority\": \"P4\", \"sentiment\": \"negative\", \"escalate\": false, \"product\": \"Vantage 5 analyzer\", \"summary\": \"Thanks for the 20-minute wait\"}"
+        },
+        {
+          "id": "hard-feature-request",
+          "raw": "{\"category\": \"feature request\", \"priority\": \"P4\", \"sentiment\": \"positive\", \"escalate\": false, \"product\": \"ThermoQ sensor\", \"summary\": \"Question about adding S3 export\"}"
+        }
+      ]
+    }
+  ]
+}

@@ -4,7 +4,8 @@ DC := docker compose
 .DEFAULT_GOAL := help
 
 .PHONY: help env gpu-check build up down logs ps test smoke smoke-gateway smoke-policy metrics health health-gateway clean \
-        adapter-data adapter-train adapters adapter-eval adapter-smoke
+        adapter-data adapter-train adapters adapter-eval adapter-smoke \
+        bench eval-baseline eval-gate cost
 
 help: ## Show available targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -41,8 +42,24 @@ smoke-gateway: ## Smoke-test all tiers through the gateway
 smoke-policy: ## Check admission, canary stability and the audit chain
 	@python scripts/smoke_policy.py
 
-test: ## Run the router unit tests
+test: ## Run the router, eval and cost unit tests
 	PYTHONPATH=src python -m unittest discover -s tests -v
+
+bench: ## Run the tier benchmark matrix (writes bench/results)
+	PYTHONPATH=src python -m bench
+
+eval-baseline: ## Record the current candidate as the drift baseline
+	PYTHONPATH=src python -m eval --no-gate --out bench/results/eval-baseline.json
+
+eval-gate: ## Score the candidate and enforce floors plus drift
+	@if [ -f bench/results/eval-baseline.json ]; then \
+		PYTHONPATH=src python -m eval --baseline bench/results/eval-baseline.json; \
+	else \
+		PYTHONPATH=src python -m eval; \
+	fi
+
+cost: ## Compute ownership cost per million output tokens
+	PYTHONPATH=src python -m cost
 
 metrics: ## Print a sample of gateway metrics
 	@curl -s http://localhost:8020/metrics | grep -E '^gateway_' | head -20

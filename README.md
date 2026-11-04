@@ -3,9 +3,10 @@
 Private, provider-agnostic serving for fine-tuned small language models — a runnable
 reference platform, not a slide deck.
 
-**Status:** Phase 3 of 6 — GPU tier, gateway, simulated CPU and cloud tiers, observability,
-two QLoRA adapters and a policy-driven router with canary, breakers and a hash-chained audit
-trail are live and measured.
+**Status:** Phase 4 of 6 — GPU tier, gateway, simulated CPU and cloud tiers, observability,
+two QLoRA adapters, a policy-driven router with canary, breakers and a hash-chained audit
+trail, plus a benchmark harness, a golden-set release gate and an ownership cost model are
+live and measured.
 
 ---
 
@@ -40,11 +41,14 @@ the distinction explicit:
 | Gateway (auth, quotas, streaming proxy, policy router, audit) | **Measured** | `make smoke-gateway` |
 | Router (admission, canary, shadow, circuit breakers, reload) | **Measured** | `make smoke-policy`, outage drill below |
 | Hash-chained audit + verification | **Measured** | `GET /v1/audit/verify` |
+| Benchmarks (closed-loop, GPU + modelled tiers) | **Measured / MODELLED per run** | `make bench`, `bench/results/tier-comparison.json` |
+| Release eval gate (24-ticket golden set, floors + drift) | **Measured** | `make eval-gate`, `src/eval/golden.jsonl` |
+| Cost model (ownership TCO + modelled tiers) | **Measured throughput, stated assumptions** | `make cost`, `config/cost.yaml` |
 | Observability (Prometheus + provisioned Grafana) | **Measured** | dashboard `slm-platform`, 7 panels |
 | CPU tier (OpenVINO / llama.cpp on Xeon/EPYC) | **Modelled** — calibrated simulator, no Xeon on this laptop | `src/tiersim`, labelled `x-simulated: true` |
 | Cloud burst tier (L4 profile) | **Modelled and wired** — a standby that residency usually excludes | `tiersim-cloud`, `x-simulated: true` |
 | OpenShift / air-gapped deployment | **Static validation** — manifests render and pass policy checks; no cluster available | `deploy/openshift` |
-| Governance, signed releases, full pipeline | Planned (Phases 4–6) | — |
+| Governance, signed releases, GitOps, sign-off pack | Planned (Phases 5–6) | — |
 
 Numbers from a simulated tier are labelled `MODELLED` everywhere they appear.
 
@@ -85,10 +89,13 @@ make up            # build, pull, download weights, wait until every service is 
 make smoke         # GPU tier directly
 make smoke-gateway # all tiers through the gateway
 make smoke-policy  # admission, residency veto, canary stability, audit chain
-make test          # router unit tests (stdlib unittest)
+make test          # router, eval and cost unit tests (stdlib unittest)
 make adapter-train # QLoRA adapters v1/v2, then hot-load them (takes the GPU ~25 min)
 make adapter-smoke # adapter aliases end to end through the gateway
 make adapter-eval  # base vs v1 vs v2 on the held-out triage set
+make bench         # tier benchmark matrix; writes bench/results
+make eval-gate     # golden-set release gate with drift against eval-baseline.json
+make cost          # ownership cost per 1M output tokens
 make logs          # follow all services
 make down          # stop (model cache and dashboards are kept)
 ```
@@ -135,8 +142,8 @@ Host: RTX 4080 Laptop GPU, 12 GB VRAM · Docker 29.4 · vLLM `v0.33.0`
 | VRAM in use | 9,975 / 12,282 MiB |
 | VRAM with both LoRA adapters | 10,563 / 12,282 MiB |
 | Engine init | 30.5 s (model load, profiling, CUDA graph capture) |
-| Time to first token | 234 ms first request · **20 ms** median warm |
-| Decode throughput | **128.5 tok/s** median, 5 runs of 80–96 tokens |
+| Time to first token | 234 ms first request · **20 ms** median warm · 53 ms at 12 clients |
+| Decode throughput | **125.5 tok/s** single stream · **1,123 tok/s** aggregate at 12 clients |
 | Structured output | valid strict JSON on the extraction prompt |
 
 ```text
@@ -436,25 +443,118 @@ hyper-parameters and the loss curve.
 
 ---
 
+## Benchmarks, release gates and cost
+
+Phase 3 made every routing decision explainable. Phase 4 makes the three claims a reviewer
+would otherwise have to take on faith measurable: **how fast the tier is under load**, **whether
+a release is good enough to promote**, and **what the owned GPU costs per token**.
+
+### Benchmark method
+
+Closed-loop, fixed concurrency: each worker holds one request in flight, so `c=12` means
+twelve simultaneous clients, not a batch size. Two warm-up requests per level, then 20
+measured requests (8 for the CPU profile), streaming with usage. Percentiles are nearest-rank,
+so a p95 is an observed request, not an interpolation. Every run records its concurrency and
+its source: a response carrying `x-simulated: true` is labelled **MODELLED** from the
+response, not from the config. Same prompt, 64 output tokens.
+
+```text
+$ make bench
+| Target | Source | c | Req/s | Output tok/s | TTFT p50 | Total p50 | Errors |
+|---|---|---:|---:|---:|---:|---:|---:|
+| gpu-direct c=1 | measured | 1 | 1.96 | 125.5 | 20 ms | 509 ms | 0 |
+| gpu-direct c=4 | measured | 4 | 7.58 | 484.8 | 27 ms | 524 ms | 0 |
+| gpu-direct c=12 | measured | 12 | 17.55 | 1123.2 | 53 ms | 569 ms | 0 |
+| adapter-v2 c=1 | measured | 1 | 1.75 | 101.6 | 28 ms | 570 ms | 0 |
+| adapter-v2 c=12 | measured | 12 | 14.67 | 850.9 | 128 ms | 683 ms | 0 |
+| cloud-sim c=12 | MODELLED | 12 | 12.32 | 788.4 | 30 ms | 810 ms | 0 |
+| cpu-sim c=12 | MODELLED | 12 | 1.91 | 122.2 | 121 ms | 4185 ms | 0 |
+```
+
+Reading it: the GPU scales **9x** from one to twelve clients while p50 total latency moves
+only 509 → 569 ms. The adapter costs 15–25% of aggregate throughput, which is the price of
+the contract it enforces. The CPU profile saturates at ~122 tok/s — it is a deadline tier,
+not a cheap GPU — and its 4.2 s total latency is the routing problem in one number. The
+simulated cloud tier is modelled, not measured; it exists so residency rules can veto or
+permit a real third candidate.
+
+### The release gate
+
+A benchmark says how fast a model is; it says nothing about whether its labels are right.
+The gate scores an alias against a **hand-written 24-ticket golden set** — eight clean,
+eight adversarial and eight held-out tickets, new wording, labels taken from the rubric in
+`finetune/prompt.py`, not from a model. It then applies absolute floors and drift against a
+recorded baseline. Both must pass.
+
+| Model | Strict JSON | Schema | Exact | Clean | Hard | Held-out | Gate |
+|---|---:|---:|---:|---:|---:|---:|---|
+| base `slm-small` | 100% | 100% | **4.2%** | 0.0% | 0.0% | 12.5% | fails floors |
+| adapter v1 | 100% | 91.7% | **75.0%** | 100% | 62.5% | 62.5% | fails schema floor |
+| adapter v2 | 100% | 100% | **83.3%** | 87.5% | 100% | 62.5% | **PASS** |
+
+```text
+$ make eval-gate
+gate slm-triage-v2: PASS
+  ok   exact_labels     actual=0.833 limit=0.7
+  ok   slice:held-out   actual=0.625 limit=0.5
+  ok   drift:exact_labels actual=0.833 limit=0.783  baseline 83.3%
+```
+
+v2's four remaining disagreements are real label errors, not schema errors: a thank-you read
+as P3, a refund chase where the word "escalate" pulled `escalate` true, a licence transfer
+read as cancellation, and a two-site outage read as P2 instead of P1. They are recorded with
+the answer the model gave, so a reviewer can disagree with the label rather than guess at it.
+`make eval-baseline` records the current release; `make eval-gate` then fails on a drop of
+more than 5 points in exact labels or 10 points in any field.
+
+### What the GPU actually costs
+
+The policy prices CPU and cloud per token because those tiers send a bill. The owned GPU has
+`cost_per_1k_out: 0.0` because its cost is capacity that was bought. `src/cost` converts
+ownership into the same unit: capex over 36 months, 180 W at PUE 1.4 and $0.18/kWh, 15% ops,
+and the **measured aggregate throughput** from `bench/results/tier-comparison.json`.
+
+| Tier | Source | $/1M output (capacity) | $/1M at 20k/day | $/request | $/month | p50 total / TTFT |
+|---|---|---:|---:|---:|---:|---:|
+| owned GPU, 35% util | measured | **$0.117** | **$2.243** | $0.000202 | **$121.11** | 509 / 20 ms |
+| cloud L4 profile | MODELLED | $0.797 | $0.797 | $0.000072 | $43.02 | 785 / 25 ms |
+| CPU Xeon profile | MODELLED | $15.80 | $15.80 | $0.001422 | $853.20 | 4141 / 116 ms |
+
+The distinction between the two GPU columns is the point: at 35% utilisation and full
+capacity the node is cheap per token, but a 20k-request/day workload uses only about 2% of
+its capacity, so the fixed bill is spread over few tokens. Break-even against the cloud
+profile is **56,069 requests/day** (2,839 against CPU), inside the node's ~1.08M
+request/day full capacity. Below that volume, cloud is cheaper; above it, owning the GPU
+wins — and the model states the assumptions rather than hiding them.
+
+Full methodology and limits are in [ADR-0005](docs/adr/ADR-0005-benchmarks-eval-cost.md).
+
+---
+
 ## Repository map
 
 ```
 compose.yaml                     the whole platform: tiers, gateway, observability
 Makefile                         operational entry points
 config/policy.yaml               versioned routing policy: aliases, candidates, canary
+config/bench.yaml                benchmark targets, concurrency levels and prompt
+config/eval-gates.yaml           release floors and drift allowances
+config/cost.yaml                 ownership assumptions: capex, power, utilisation, workload
 config/tenants.example.yaml      tenant keys, quotas, region, data class; tenants.yaml is gitignored
 scripts/smoke.py                 GPU tier smoke test
 scripts/smoke_gateway.py         end-to-end test through the gateway, all tiers
 scripts/smoke_policy.py          admission, residency, canary stability, audit chain
 scripts/smoke_adapters.py        adapter aliases and contract check through the gateway
 scripts/load_adapters.py         runtime load of every adapter into vLLM
-tests/                           router unit tests (stdlib unittest)
+tests/                           router, eval and cost unit tests (stdlib unittest)
 docker/                          gateway, simulator and QLoRA training images
 src/gateway/                     OpenAI-compatible API, auth, quotas, proxy, policy use, audit
 src/router/                      policy model, admission, canary, breakers, hash-chained audit
 src/tiersim/                     calibrated CPU / cloud tier simulator
 src/registry/                    signed model release manifests
-src/eval/                        golden sets, deterministic checks, drift detection
+src/bench/                       closed-loop load generator and report rendering
+src/eval/                        golden-set scoring, floors and drift gate
+src/cost/                        ownership TCO, utilisation sweep and break-even
 deploy/observability/grafana/    provisioned datasource and dashboard
 deploy/openshift/                SCC, Route, ImageStream, GPU Operator, IDMS/ITMS
 deploy/kustomize/                overlays: openshift, vanilla k8s, airgap
@@ -466,7 +566,7 @@ finetune/train_qlora.py          QLoRA trainer (4-bit NF4, assistant-only loss)
 finetune/evaluate.py             strict JSON / schema / per-field evaluation
 finetune/data/                   generated train-v1, train-v2 and eval splits
 adapters/                        trained adapter artifacts (gitignored, reproducible)
-bench/                           load generator and recorded results
+bench/results/                   recorded benchmarks, eval gate and cost artifacts
 docs/adr/                        architecture decision records
 docs/signoff/                    architecture review template and completed review
 ```
@@ -483,9 +583,9 @@ would fall back to dequantise-on-the-fly and lose to INT4 on both latency and me
 
 **Third-party quantisation is a recorded risk.** Qwen does not publish an official AWQ
 build of the 2507 Instruct 4B, so Phase 0 pins a community AWQ artifact by revision. This
-is acceptable for a reference build and unacceptable for regulated production — Phase 4
-re-quantises in-house from official weights and records provenance per release. This is
-ADR-0002 once the ADR series lands.
+is acceptable for a reference build and unacceptable for regulated production — a later
+release phase re-quantises in-house from official weights and records provenance per
+release. This is ADR-0002 in this series.
 
 **Headroom is reserved on purpose.** 8k context and 16 concurrent sequences leave VRAM
 for multiple LoRA adapters in Phase 2, rather than maxing out a single-model deployment.
@@ -558,6 +658,33 @@ one, the gateway refuses to start on a broken chain, and verification is an endp
 than a script someone might forget to run. The head hash still needs an external sink for
 tamper resistance; that limit is stated rather than hidden.
 
+### Phase 4
+
+**Throughput without its concurrency is a marketing number.** A single-stream median hides
+batching, which is the reason a GPU server exists. Every benchmark result names its
+concurrency, percentile and source; a MODELLED run is identified from `x-simulated`, not
+from a configuration flag someone could forget.
+
+**Floors and drift catch different failures.** A floor rejects a bad release; a drift check
+rejects a regression that is still above the floor. The gate reports every check rather than
+stopping at the first failure, because "schema passed but the product field fell eight
+points" is a decision a reviewer has to make, not a boolean.
+
+**The golden set is small on purpose, and its labels are reviewable.** Twenty-four tickets
+cannot estimate a population, but they can catch a broken contract before promotion. The
+tickets are new wording with labels from the rubric; the model's wrong answers are recorded
+alongside them so a reviewer can challenge the label, not just the score.
+
+**Ownership is a fixed cost, so the useful question is break-even.** A per-token price for an
+owned GPU is meaningless without a utilisation and a volume. The cost model reports both the
+capacity rate and the rate at the stated workload, which is why the same node looks cheap at
+full utilisation and expensive at 20k requests/day.
+
+**Limits are recorded next to the numbers.** Closed-loop on a laptop, 24 golden tickets, a
+prefill/decode ratio borrowed from the benchmark prompt: each is a stated limitation, not a
+silent assumption. Phase 5 can replace the arrival model and the hardware profile without
+changing the commands.
+
 ---
 
 ## Roadmap
@@ -568,9 +695,9 @@ tamper resistance; that limit is stated rather than hidden.
 | 1 | Gateway, CPU tier simulator, Prometheus + Grafana | **Done** |
 | 2 | QLoRA adapters v1/v2, multi-LoRA hot loading | **Done** |
 | 3 | Router policy engine, canary, audit trail | **Done** |
-| 4 | Benchmarks, eval harness, cost model | Next |
-| 5 | OpenShift / air-gap manifests, GitOps, admission policy | |
-| 6 | ADRs, C4 diagrams, architecture sign-off pack | |
+| 4 | Benchmarks, golden-set eval gate, ownership cost model | **Done** |
+| 5 | OpenShift / air-gap manifests, GitOps, admission policy | Next |
+| 6 | C4 diagrams, signed releases, architecture sign-off pack | |
 
 ---
 

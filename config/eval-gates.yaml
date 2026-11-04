@@ -1,0 +1,21 @@
+# Release gate for the triage adapters. Floors catch a bad release; drift
+# catches a slow regression that would still clear the floor. Both are needed.
+#
+# The golden set is hand-written and reviewable: 24 tickets, new wording, labels
+# taken from the rubric in finetune/prompt.py rather than from a model.
+version: "2026-11-04.1"
+
+golden: src/eval/golden.jsonl
+
+thresholds:
+  strict_json: 0.99
+  schema: 0.99
+  exact_labels: 0.70
+  slice_exact:
+    clean: 0.60
+    hard: 0.50
+    held-out: 0.50
+
+drift:
+  max_exact_drop: 0.05
+  max_field_drop: 0.10

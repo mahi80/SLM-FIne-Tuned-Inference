@@ -1,0 +1,27 @@
+# Cost assumptions for the owned GPU tier.
+#
+# The GPU has no per-token invoice, so the model turns ownership into the same
+# unit the policy uses: dollars per million output tokens. Change an assumption
+# here rather than editing the arithmetic.
+version: "2026-11-04.1"
+
+workload:
+  prompt_tokens: 700
+  output_tokens: 90
+  requests_per_day: 20000
+
+owned_gpu:
+  name: "RTX 4080 Laptop node (amortised)"
+  capex_usd: 2600
+  amortisation_months: 36
+  power_w: 180
+  pue: 1.4
+  electricity_usd_per_kwh: 0.18
+  ops_overhead_pct: 15
+  utilisation: 0.35
+  # Used only when the benchmark artifact is absent. The benchmark's aggregate
+  # throughput is preferred because single-stream decode understates capacity.
+  fallback_output_tps: 128.5
+  bench_path: bench/results/tier-comparison.json
+  bench_label_prefix: gpu-direct
+  bench_latency_label: gpu-direct c=1

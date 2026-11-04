@@ -1,0 +1,34 @@
+# Benchmark matrix. Every target speaks the same OpenAI contract, so the only
+# difference the numbers can show is the tier (or the adapter) behind it.
+#
+# Modelled targets are labelled MODELLED in the report from their x-simulated
+# header, not from this file.
+version: "2026-11-04.1"
+
+prompt: >-
+  A maintenance engineer asks why vibration monitoring matters on an industrial
+  pump. Answer in plain language, four or five sentences, without a list.
+max_tokens: 64
+stream: true
+warmup: 2
+concurrency: [1, 4, 12]
+requests: 20
+
+targets:
+  - label: gpu-direct
+    base_url: http://localhost:8010
+    model: slm-small
+
+  - label: adapter-v2
+    base_url: http://localhost:8020
+    model: slm-triage-v2
+    api_key: dev-acme-key
+
+  - label: cloud-sim
+    base_url: http://localhost:8012
+    model: slm-small
+
+  - label: cpu-sim
+    base_url: http://localhost:8011
+    model: slm-small
+    requests: 8

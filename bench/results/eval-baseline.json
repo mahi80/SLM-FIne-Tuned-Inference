@@ -1,0 +1,92 @@
+{
+  "golden": "src/eval/golden.jsonl",
+  "golden_sha256": "747ffd5dab7783db1b0e2c2e880f7ef62fb5594283af09f6d40e8693262d531d",
+  "base_url": "http://localhost:8020",
+  "n": 24,
+  "gates": "config/eval-gates.yaml",
+  "started_at": 1793799801,
+  "models": [
+    {
+      "model": "slm-triage-v2",
+      "n": 24,
+      "errors": 0,
+      "strict_json_rate": 1.0,
+      "lenient_json_rate": 1.0,
+      "schema_rate": 1.0,
+      "exact_labels_rate": 0.833,
+      "field_accuracy": {
+        "category": 0.958,
+        "priority": 0.875,
+        "sentiment": 1.0,
+        "escalate": 0.958,
+        "product": 1.0
+      },
+      "summary_ok_rate": 1.0,
+      "slices": {
+        "clean": {
+          "n": 8,
+          "schema": 1.0,
+          "exact": 0.875
+        },
+        "hard": {
+          "n": 8,
+          "schema": 1.0,
+          "exact": 1.0
+        },
+        "held-out": {
+          "n": 8,
+          "schema": 1.0,
+          "exact": 0.625
+        }
+      },
+      "invalid_counts": {
+        "labels": 24
+      },
+      "mismatches": [
+        {
+          "id": "clean-billing-thanks",
+          "slice": "clean",
+          "fields": [
+            "priority"
+          ],
+          "got": {
+            "priority": "P3"
+          }
+        },
+        {
+          "id": "heldout-refund-chase",
+          "slice": "held-out",
+          "fields": [
+            "escalate"
+          ],
+          "got": {
+            "escalate": true
+          }
+        },
+        {
+          "id": "heldout-licence-transfer",
+          "slice": "held-out",
+          "fields": [
+            "category",
+            "priority"
+          ],
+          "got": {
+            "category": "cancellation",
+            "priority": "P3"
+          }
+        },
+        {
+          "id": "heldout-multi-site-outage",
+          "slice": "held-out",
+          "fields": [
+            "priority"
+          ],
+          "got": {
+            "priority": "P2"
+          }
+        }
+      ],
+      "failures": []
+    }
+  ]
+}

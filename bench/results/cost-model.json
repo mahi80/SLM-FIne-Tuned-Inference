@@ -1,0 +1,127 @@
+{
+  "version": "2026-11-04.1",
+  "workload": {
+    "prompt_tokens": 700,
+    "output_tokens": 90,
+    "requests_per_day": 20000,
+    "output_tokens_per_day": 1800000
+  },
+  "owned_gpu": {
+    "name": "RTX 4080 Laptop node (amortised)",
+    "capex_usd": 2600,
+    "amortisation_months": 36,
+    "power_w": 180,
+    "pue": 1.4,
+    "electricity_usd_per_kwh": 0.18,
+    "ops_overhead_pct": 15,
+    "utilisation": 0.35,
+    "fallback_output_tps": 128.5,
+    "bench_path": "bench/results/tier-comparison.json",
+    "bench_label_prefix": "gpu-direct",
+    "bench_latency_label": "gpu-direct c=1",
+    "hourly_usd": 0.1659,
+    "monthly_usd": 121.11,
+    "output_tps": 1123.2,
+    "full_capacity_requests_per_day": 1078272,
+    "workload_utilisation": 0.0185,
+    "capacity_shortfall": false,
+    "throughput_source": {
+      "output_tps": 1123.2,
+      "concurrency": 12,
+      "requests_per_s": 17.55
+    }
+  },
+  "tiers": [
+    {
+      "tier": "gpu-owned",
+      "source": "measured",
+      "output_tps": 1123.2,
+      "usd_per_1m_output": 0.1172,
+      "usd_per_1m_at_workload": 2.2428,
+      "usd_per_request": 0.000202,
+      "usd_per_month_at_workload": 121.11,
+      "requests_per_day_capacity": 377395,
+      "utilisation": 0.35,
+      "latency": {
+        "ttft_ms": 19.84,
+        "total_ms": 509.16,
+        "concurrency": 1
+      },
+      "notes": "capacity cost, not a per-token invoice"
+    },
+    {
+      "tier": "cpu-xeon-4b",
+      "source": "MODELLED",
+      "output_tps": 17.0,
+      "usd_per_1m_output": 15.8,
+      "usd_per_1m_at_workload": 15.8,
+      "usd_per_request": 0.001422,
+      "usd_per_month_at_workload": 853.2,
+      "requests_per_day_capacity": null,
+      "utilisation": null,
+      "latency": {
+        "ttft_ms": 115.62,
+        "total_ms": 4140.87,
+        "concurrency": 1
+      },
+      "notes": "MODELLED: 4B Q4_K_M, decode is memory-bandwidth bound"
+    },
+    {
+      "tier": "gpu-l4-4b",
+      "source": "MODELLED",
+      "output_tps": 95.0,
+      "usd_per_1m_output": 0.7967,
+      "usd_per_1m_at_workload": 0.7967,
+      "usd_per_request": 7.2e-05,
+      "usd_per_month_at_workload": 43.02,
+      "requests_per_day_capacity": null,
+      "utilisation": null,
+      "latency": {
+        "ttft_ms": 25.43,
+        "total_ms": 784.51,
+        "concurrency": 1
+      },
+      "notes": "MODELLED: 4B AWQ, continuous batching at moderate utilisation"
+    }
+  ],
+  "utilisation_sweep": [
+    {
+      "utilisation": 0.2,
+      "usd_per_1m_output": 0.2051,
+      "requests_per_day_capacity": 215654
+    },
+    {
+      "utilisation": 0.35,
+      "usd_per_1m_output": 0.1172,
+      "requests_per_day_capacity": 377395
+    },
+    {
+      "utilisation": 0.5,
+      "usd_per_1m_output": 0.0821,
+      "requests_per_day_capacity": 539136
+    },
+    {
+      "utilisation": 0.7,
+      "usd_per_1m_output": 0.0586,
+      "requests_per_day_capacity": 754790
+    },
+    {
+      "utilisation": 0.9,
+      "usd_per_1m_output": 0.0456,
+      "requests_per_day_capacity": 970444
+    }
+  ],
+  "break_even_vs_owned": [
+    {
+      "tier": "cpu-xeon-4b",
+      "requests_per_day": 2839.0,
+      "owned_fits": true
+    },
+    {
+      "tier": "gpu-l4-4b",
+      "requests_per_day": 56069.0,
+      "owned_fits": true
+    }
+  ],
+  "method": "owned $/1M output = hourly cost * 1e6 / (measured output tps * 3600 * utilisation); modelled tiers use their per-1k input/output prices at 700:90 input:output"
+}
