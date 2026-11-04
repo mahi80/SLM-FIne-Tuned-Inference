@@ -59,7 +59,10 @@ Three constraints shaped the answer:
    id, model, images, adapters, policy and the evidence paths. `python -m registry build`
    turns it plus the artifacts into `release/<id>.json`, which records hashes of the adapter
    tree, policy, golden set, gate report and baseline, and the measured benchmark/cost
-   figures. It refuses to build when the gate failed or an artifact is missing.
+   figures. It refuses to build when the gate failed, an artifact is missing, or the golden
+   set no longer matches the report that gated it. Text artifacts are hashed with CRLF
+   normalised to LF, so the same file carries the same digest on a Windows working tree and
+   on a Linux runner; adapter weights are hashed raw.
 2. **The signature covers canonical JSON.** `openssl pkeyutl -sign -rawin` with an Ed25519
    key produces `release/<id>.json.sig`. Verification re-canonicalises the file, so
    formatting changes are free and value changes are fatal. Signatures are deterministic and

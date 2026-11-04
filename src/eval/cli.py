@@ -92,7 +92,7 @@ def main() -> None:
     report = {
         "golden": args.golden,
         "golden_sha256": hashlib.sha256(
-            Path(args.golden).read_bytes()
+            Path(args.golden).read_bytes().replace(b"\r\n", b"\n")
         ).hexdigest(),
         "base_url": args.base_url,
         "n": len(rows),
@@ -133,7 +133,7 @@ def main() -> None:
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    out.write_text(json.dumps(report, indent=2), encoding="utf-8", newline="\n")
     print()
     _print_summary(report)
     print(f"\nreport written to {out}")

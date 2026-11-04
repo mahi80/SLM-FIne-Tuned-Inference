@@ -119,12 +119,12 @@ def main() -> None:
     }
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    out.write_text(json.dumps(report, indent=2), encoding="utf-8", newline="\n")
 
     markdown = render_markdown(report)
     md = Path(args.markdown)
     md.parent.mkdir(parents=True, exist_ok=True)
-    md.write_text(markdown, encoding="utf-8")
+    md.write_text(markdown, encoding="utf-8", newline="\n")
     print()
     print(markdown)
     print(f"report written to {out}")

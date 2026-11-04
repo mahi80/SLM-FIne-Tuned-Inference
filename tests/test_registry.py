@@ -14,6 +14,7 @@ from registry.manifest import (
     load_release_config,
     sha256_bytes,
     sha256_file,
+    sha256_text_file,
     validate_manifest,
 )
 
@@ -21,14 +22,14 @@ REPO = Path(__file__).resolve().parent.parent
 HAS_OPENSSL = signing.available()
 
 
-def gate_report(passed=True, exact=0.83):
+def gate_report(passed=True, exact=0.83, golden_sha256=None):
     checks = [
         {"name": "exact_labels", "actual": exact, "limit": 0.7, "ok": passed, "detail": ""},
         {"name": "schema", "actual": 1.0, "limit": 0.99, "ok": True, "detail": ""},
     ]
     return {
         "golden": "golden.jsonl",
-        "golden_sha256": "a" * 64,
+        "golden_sha256": golden_sha256,
         "n": 24,
         "models": [
             {
@@ -83,8 +84,10 @@ class FixtureRepo:
         (root / "config/gates.yaml").write_text("thresholds: {}\ndrift: {}\n", encoding="utf-8")
         (root / "adapters/a1/adapter_config.json").write_text('{"r": 16}\n', encoding="utf-8")
         (root / "adapters/a1/adapter_model.safetensors").write_bytes(b"\x00" * 64)
+        (root / "golden.jsonl").write_text('{"id": "a"}\n', encoding="utf-8")
         (root / "bench/results/eval.json").write_text(
-            json.dumps(gate_report()), encoding="utf-8"
+            json.dumps(gate_report(golden_sha256=sha256_file(root / "golden.jsonl"))),
+            encoding="utf-8",
         )
         (root / "bench/results/bench.json").write_text(
             json.dumps(
@@ -138,6 +141,15 @@ class CanonicalTests(unittest.TestCase):
             sha256_bytes(canonical_bytes({"tag": "1.0.1"})),
         )
 
+    def test_text_digest_ignores_line_endings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            unix = Path(tmp) / "unix.json"
+            windows = Path(tmp) / "windows.json"
+            unix.write_bytes(b'{"a": 1}\n{"b": 2}\n')
+            windows.write_bytes(b'{"a": 1}\r\n{"b": 2}\r\n')
+            self.assertNotEqual(sha256_file(unix), sha256_file(windows))
+            self.assertEqual(sha256_text_file(unix), sha256_text_file(windows))
+
 
 class HashTreeTests(unittest.TestCase):
     def test_digest_covers_paths_and_content(self):
@@ -179,7 +191,11 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(validate_manifest(manifest), [])
         self.assertEqual(manifest["gate"]["passed"], True)
         self.assertEqual(manifest["gate"]["checks_total"], 2)
-        self.assertEqual(manifest["policy"]["sha256"], sha256_file(self.root / "config/policy.yaml"))
+        self.assertEqual(manifest["policy"]["sha256"], sha256_text_file(self.root / "config/policy.yaml"))
+        self.assertEqual(
+            manifest["gate"]["golden_sha256"],
+            sha256_text_file(self.root / "golden.jsonl"),
+        )
         self.assertEqual(
             manifest["adapters"][0]["sha256"],
             hash_tree(self.root / "adapters/a1")["sha256"],
@@ -201,6 +217,12 @@ class BuildTests(unittest.TestCase):
         shutil.rmtree(self.root / "adapters/a1")
         with self.assertRaises(ManifestError):
             self.manifest()
+
+    def test_golden_edit_after_the_gate_blocks_the_manifest(self):
+        (self.root / "golden.jsonl").write_text('{"id": "b"}\n', encoding="utf-8")
+        with self.assertRaises(ManifestError) as caught:
+            self.manifest()
+        self.assertIn("changed since the gate ran", str(caught.exception))
 
 
 class ValidationTests(unittest.TestCase):
@@ -321,7 +343,7 @@ class CommittedReleaseTests(unittest.TestCase):
         manifest = load_manifest(self.manifest_path())
         self.assertEqual(
             manifest["policy"]["sha256"],
-            sha256_file(REPO / manifest["policy"]["path"]),
+            sha256_text_file(REPO / manifest["policy"]["path"]),
         )
 
 

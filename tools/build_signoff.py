@@ -25,7 +25,7 @@ from registry.manifest import (
     git_state,
     load_manifest,
     sha256_bytes,
-    sha256_file,
+    sha256_text_file,
 )
 
 REPO = Path(__file__).resolve().parent.parent
@@ -81,7 +81,7 @@ def release_record(repo: Path) -> dict | None:
         verified, detail = None, "openssl, public key or signature unavailable"
     return {
         "manifest": path.relative_to(repo).as_posix(),
-        "manifest_sha256": sha256_file(path),
+        "manifest_sha256": sha256_text_file(path),
         "canonical_sha256": sha256_bytes(canonical_bytes(manifest)),
         "signature": signature.name,
         "signature_verified": verified,
@@ -115,7 +115,7 @@ def main(argv: list[str] | None = None) -> int:
     artifacts = {}
     for relative in ARTIFACTS:
         path = repo / relative
-        artifacts[relative] = sha256_file(path) if path.is_file() else None
+        artifacts[relative] = sha256_text_file(path) if path.is_file() else None
 
     evidence = {
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -137,7 +137,9 @@ def main(argv: list[str] | None = None) -> int:
 
     out = args.out if args.out.is_absolute() else repo / args.out
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    out.write_text(
+        json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
+    )
 
     print(f"evidence  {out.relative_to(repo).as_posix()}")
     print(f"tests     {tests}")

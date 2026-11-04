@@ -54,6 +54,11 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def sha256_text_file(path: Path) -> str:
+    """Digest a text artifact as git stores it: line endings are not content."""
+    return sha256_bytes(Path(path).read_bytes().replace(b"\r\n", b"\n"))
+
+
 def hash_tree(root: Path) -> dict:
     """Digest a directory by path and content, so a rename is a change too."""
     root = Path(root)
@@ -126,14 +131,28 @@ def _gate_record(repo: Path, gate_config: dict) -> dict:
     if gate.get("passed") is not True:
         failed = [c["name"] for c in gate.get("checks", []) if not c.get("ok")]
         raise ManifestError(f"release gate failed for '{model}': {', '.join(failed) or 'unknown'}")
+
+    golden = report.get("golden")
+    golden_digest = None
+    if golden:
+        golden_path = repo / golden
+        if not golden_path.is_file():
+            raise ManifestError(f"missing golden set {golden}")
+        golden_digest = sha256_text_file(golden_path)
+        reported = report.get("golden_sha256")
+        # A report written before text digests were normalised recorded raw bytes.
+        # Accept that digest, but sign the portable one.
+        if reported and reported not in (golden_digest, sha256_file(golden_path)):
+            raise ManifestError(f"{golden} changed since the gate ran; re-run make eval-gate")
+
     record = {
         "report": gate_config["report"],
-        "report_sha256": sha256_file(report_path),
+        "report_sha256": sha256_text_file(report_path),
         "config": gate_config["config"],
-        "config_sha256": sha256_file(config_path),
+        "config_sha256": sha256_text_file(config_path),
         "model": model,
-        "golden": report.get("golden"),
-        "golden_sha256": report.get("golden_sha256"),
+        "golden": golden,
+        "golden_sha256": golden_digest,
         "n": entry.get("n"),
         "passed": bool(gate.get("passed")),
         "checks_total": len(gate.get("checks") or []),
@@ -150,7 +169,7 @@ def _gate_record(repo: Path, gate_config: dict) -> dict:
         baseline_path = repo / baseline
         if baseline_path.is_file():
             record["baseline"] = baseline
-            record["baseline_sha256"] = sha256_file(baseline_path)
+            record["baseline_sha256"] = sha256_text_file(baseline_path)
     if gate_config.get("in_cluster_model"):
         record["in_cluster_model"] = gate_config["in_cluster_model"]
     return record
@@ -166,7 +185,7 @@ def _benchmark_record(repo: Path, path: str) -> dict:
     best = max(measured, key=lambda run: run.get("output_tokens_per_s") or 0, default=None)
     return {
         "path": path,
-        "sha256": sha256_file(repo / path),
+        "sha256": sha256_text_file(repo / path),
         "gpu_output_tps_max": (best or {}).get("output_tokens_per_s"),
         "gpu_concurrency_at_max": (best or {}).get("concurrency"),
         "runs": len(report.get("runs", [])),
@@ -183,7 +202,7 @@ def _cost_record(repo: Path, path: str) -> dict:
     }
     return {
         "path": path,
-        "sha256": sha256_file(repo / path),
+        "sha256": sha256_text_file(repo / path),
         "requests_per_day": (report.get("workload") or {}).get("requests_per_day"),
         "owned_usd_per_1m_at_workload": owned.get("usd_per_1m_at_workload"),
         "break_even_requests_per_day": break_even,
@@ -198,7 +217,7 @@ def _policy_record(repo: Path, path: str) -> dict:
     version = policy.get("version")
     if not version:
         raise ManifestError(f"{path} has no version")
-    return {"path": path, "version": str(version), "sha256": sha256_file(policy_path)}
+    return {"path": path, "version": str(version), "sha256": sha256_text_file(policy_path)}
 
 
 def _adapter_records(repo: Path, config: dict, adapters_dir: Path) -> list[dict]:

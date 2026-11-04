@@ -83,7 +83,7 @@ def main() -> None:
     report = build_report(load_config(args.config), args.utilisation)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    out.write_text(json.dumps(report, indent=2), encoding="utf-8", newline="\n")
     print(render(report))
     print(f"report written to {out}")
 

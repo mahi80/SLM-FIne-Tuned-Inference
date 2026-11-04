@@ -3,7 +3,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from registry.manifest import load_manifest, load_release_config, sha256_bytes, sha256_file
+from registry.manifest import (
+    load_manifest,
+    load_release_config,
+    sha256_bytes,
+    sha256_text_file,
+)
 from tools import validate_release as vr
 
 REPO = Path(__file__).resolve().parent.parent
@@ -197,25 +202,25 @@ class EvidenceTests(unittest.TestCase):
         self.manifest = {
             "policy": {
                 "path": "config/policy.yaml",
-                "sha256": sha256_file(self.root / "config/policy.yaml"),
+                "sha256": sha256_text_file(self.root / "config/policy.yaml"),
             },
             "gate": {
                 "report": "bench/results/eval.json",
-                "report_sha256": sha256_file(self.root / "bench/results/eval.json"),
+                "report_sha256": sha256_text_file(self.root / "bench/results/eval.json"),
                 "config": "config/gates.yaml",
-                "config_sha256": sha256_file(self.root / "config/gates.yaml"),
+                "config_sha256": sha256_text_file(self.root / "config/gates.yaml"),
                 "baseline": "bench/results/baseline.json",
-                "baseline_sha256": sha256_file(self.root / "bench/results/baseline.json"),
+                "baseline_sha256": sha256_text_file(self.root / "bench/results/baseline.json"),
                 "golden": "src/eval/golden.jsonl",
-                "golden_sha256": sha256_file(self.root / "src/eval/golden.jsonl"),
+                "golden_sha256": sha256_text_file(self.root / "src/eval/golden.jsonl"),
             },
             "benchmark": {
                 "path": "bench/results/bench.json",
-                "sha256": sha256_file(self.root / "bench/results/bench.json"),
+                "sha256": sha256_text_file(self.root / "bench/results/bench.json"),
             },
             "cost": {
                 "path": "bench/results/cost.json",
-                "sha256": sha256_file(self.root / "bench/results/cost.json"),
+                "sha256": sha256_text_file(self.root / "bench/results/cost.json"),
             },
         }
 

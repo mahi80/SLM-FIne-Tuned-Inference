@@ -27,7 +27,7 @@ from registry.manifest import (
     load_manifest,
     load_release_config,
     sha256_bytes,
-    sha256_file,
+    sha256_text_file,
     validate_manifest,
 )
 from tools.validate_deploy import (
@@ -84,7 +84,7 @@ def check_evidence(manifest: dict, repo: Path) -> list[str]:
     policy_path = repo / str(policy.get("path"))
     if not policy_path.is_file():
         errors.append(f"policy {policy.get('path')} is missing")
-    elif sha256_file(policy_path) != policy.get("sha256"):
+    elif sha256_text_file(policy_path) != policy.get("sha256"):
         errors.append("config/policy.yaml changed since the manifest was signed")
 
     gate = manifest.get("gate") or {}
@@ -92,15 +92,15 @@ def check_evidence(manifest: dict, repo: Path) -> list[str]:
         path = repo / str(gate.get(key))
         if not path.is_file():
             errors.append(f"gate {key} {gate.get(key)} is missing")
-        elif sha256_file(path) != gate.get(digest_key):
+        elif sha256_text_file(path) != gate.get(digest_key):
             errors.append(f"gate {key} {gate.get(key)} changed since the manifest was signed")
     if gate.get("baseline"):
         path = repo / gate["baseline"]
-        if path.is_file() and sha256_file(path) != gate.get("baseline_sha256"):
+        if path.is_file() and sha256_text_file(path) != gate.get("baseline_sha256"):
             errors.append("eval baseline changed since the manifest was signed")
     if gate.get("golden"):
         path = repo / gate["golden"]
-        if path.is_file() and sha256_file(path) != gate.get("golden_sha256"):
+        if path.is_file() and sha256_text_file(path) != gate.get("golden_sha256"):
             errors.append("golden set changed since the gate produced the manifest")
 
     for name in ("benchmark", "cost"):
@@ -108,7 +108,7 @@ def check_evidence(manifest: dict, repo: Path) -> list[str]:
         path = repo / str(record.get("path"))
         if not path.is_file():
             errors.append(f"{name} evidence {record.get('path')} is missing")
-        elif sha256_file(path) != record.get("sha256"):
+        elif sha256_text_file(path) != record.get("sha256"):
             errors.append(f"{name} evidence {record.get('path')} changed since signing")
     return errors
 

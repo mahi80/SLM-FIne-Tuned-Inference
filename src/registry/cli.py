@@ -50,7 +50,7 @@ def cmd_build(args: argparse.Namespace) -> int:
     if out.exists() and not args.force:
         raise ManifestError(f"{out} exists; pass --force to replace it")
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    out.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8", newline="\n")
     _print_manifest(manifest, out)
     print("next      sign it: python -m registry sign --manifest " + str(out.relative_to(repo)))
     return 0
