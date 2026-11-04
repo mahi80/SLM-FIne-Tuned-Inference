@@ -26,6 +26,7 @@ Python 3.12, OpenSSL 3.5, `kubectl` for rendering only.
 | A-13 | A signed release matches the deployment tree | `make release-check` | manifest signature verified; policy, images, revision, adapter set and gate all agree | Measured |
 | A-14 | Secrets are not in Git; workloads are non-root with limits and probes | `make deploy-validate`, `tests/test_deploy.py` | no `Secret` objects rendered; 17 deployment tests pass | Static |
 | A-15 | Air gap removes internet egress and forces offline mode | `make deploy-validate` | model-download NetworkPolicy absent; `HF_HUB_OFFLINE=1` present | Static |
+| A-16 | CI runs the tests and both validators on a hosted runner | GitHub Actions run `41875084383` on `31b4a7c` | unit tests, `validate_deploy`, `validate_release` and `registry verify` all passed | Measured (hosted), no cluster |
 
 Reproducible artifacts for each row are under [`bench/results/`](../../bench/results) and
 the test suite; [evidence.json](evidence.json) records their hashes and the commit.
@@ -44,7 +45,6 @@ the test suite; [evidence.json](evidence.json) records their hashes and the comm
 | N-08 | Production load and HA | One host, one GPU, one gateway replica | Quotas, breakers and audit assume one writer | [R-08](risks.md#r-08--gateway-is-a-single-writer) |
 | N-09 | Security testing beyond unit tests | No pentest, fuzzing or dependency scanning in CI yet | Unknown classes of input/API defects | [R-05](risks.md#r-05--no-in-cluster-mtls), [R-16](risks.md#r-16--no-dependency-or-image-scanning) |
 | N-10 | Audit sink durability under storage failure | Single node | A failed audit write does not fail the request | [R-01](risks.md#r-01--audit-chain-is-evidence-not-prevention) |
-| N-11 | CI workflow executed on a hosted runner | `.github/workflows/ci.yml` is committed but was not run from this environment | Green test and validator status is local evidence, not a hosted badge | R-16 |
 
 ## Conditions
 

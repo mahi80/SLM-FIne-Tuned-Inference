@@ -54,7 +54,7 @@ the distinction explicit:
 | GitOps, release hooks and admission policy | **Static validation** — Argo CD app-of-apps, Kyverno ClusterPolicies, PostSync eval gate | `deploy/gitops`, `deploy/policies` |
 | Signed release manifest (Ed25519, canonical JSON, drift checks) | **Measured** | `make release`, `make release-check`, `release/slm-0.5.0.json` |
 | C4 views, threat model, acceptance and sign-off pack | **Documented** — review artifacts, not runtime evidence | `docs/architecture/c4.md`, `docs/signoff/` |
-| CI pipeline (tests + both validators) | **Committed, not executed here** — no Actions run from this environment | `.github/workflows/ci.yml` |
+| CI pipeline (tests + both validators) | **Verified** — GitHub Actions run `41875084383`, all steps green | `.github/workflows/ci.yml` |
 
 Numbers from a simulated tier are labelled `MODELLED` everywhere they appear.
 
@@ -247,7 +247,7 @@ The review pack answers the questions a reviewer actually asks, in order:
 |---|---|
 | [requirements.md](docs/signoff/requirements.md) | What was asked, requirement by requirement, and which ones are not met |
 | [c4.md](docs/architecture/c4.md) | What the system is: L1–L4 views, runtime sequence, trust boundaries |
-| [acceptance.md](docs/signoff/acceptance.md) | What was verified (A-01…A-15), what was not (N-01…N-10), and the conditions (C-01…C-09) |
+| [acceptance.md](docs/signoff/acceptance.md) | What was verified (A-01…A-16), what was not (N-01…N-10), and the conditions (C-01…C-09) |
 | [threat-model.md](docs/signoff/threat-model.md) | What can go wrong, by asset, actor and entry point |
 | [risks.md](docs/signoff/risks.md) | Which risks are accepted, with anchors into the code |
 | [operations.md](docs/signoff/operations.md) | How it runs: SLOs, alerts, runbooks, backups |
@@ -873,14 +873,16 @@ release cannot produce a manifest at all, because a "signed record of a failed g
 forensic artifact that belongs in the CI log, not in the registry next to passing releases.
 
 **The review pack states what is missing.** Requirements are mapped one by one with explicit
-`Not demonstrated` and `N/A` statuses; acceptance lists N-01…N-10 beside A-01…A-15; each
+`Not demonstrated` and `N/A` statuses; acceptance lists N-01…N-10 beside A-01…A-16; each
 verdict points at the risk it accepts. A sign-off that only lists successes is not a
 sign-off, it is marketing.
 
 **CI runs the same commands a reviewer does.** The workflow is tests, `validate_deploy`,
-`validate_release`, `registry verify` — no bespoke checks that exist only in CI. It is
-committed and reviewed but has not been executed from this environment; that is recorded in
-the acceptance record rather than implied to have run.
+`validate_release`, `registry verify` — no bespoke checks that exist only in CI. Its first
+run found a real portability bug the local suite could not see: the manifest had hashed text
+evidence as raw bytes, so the CRLF files on this Windows machine and the LF checkout on the
+runner disagreed. Text digests now normalise line endings, and the fix is covered by a test
+that writes the same document both ways.
 
 ---
 
