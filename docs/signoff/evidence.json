@@ -8,7 +8,7 @@
     "config/cost.yaml": "fc9bfb7777ae5b703732d9d9954f80d1026fdc1e226166e9104f1d61bc434622",
     "config/eval-gates.yaml": "50fee941f061743c74fd0ae2f8bb0511ee85cbf8f7be69d445ed19321ae2842e",
     "config/policy.yaml": "b0f1fc800bf779e33e2ac63d60b9c1ee213cef3ac88c19f4d5fb43127c1c097c",
-    "config/release.yaml": "030627fc35ad742e8115cf019cd577157bea0972414103d35c561f78b7daefbd",
+    "config/release.yaml": "1933499d75c501a4e41aa85c9a6e6563a63ff0c79b7456efb725b2c79a2b0a2d",
     "src/eval/golden.jsonl": "819c526a4406cb3a2a2b820fa535c3f7b8ad84aa10ea780abc3092a857acce39"
   },
   "environment": {
@@ -16,7 +16,7 @@
     "platform": "Windows-11-10.0.26200-SP0",
     "python": "3.12.10"
   },
-  "generated_at": "2026-11-04T18:20:12Z",
+  "generated_at": "2026-11-04T23:49:40Z",
   "notes": [
     "Artifacts are hashed as they exist in the working tree at generation time.",
     "The release signature is verified against the committed public key, not a trust root.",
@@ -33,7 +33,7 @@
         "sha256": "a459129539cf1573736a011ae172f6e2e88c24366e597d4c5828ce3ab4fca159"
       }
     ],
-    "canonical_sha256": "3532df1f4d893298632c4e476f22232f4da59663d4fce1782e9effdfede52682",
+    "canonical_sha256": "3b611cb09e8148006fe3b4f424e2a64b77024f6e3e03b128169ebdbb918675da",
     "gate": {
       "checks_total": 13,
       "metrics": {
@@ -62,7 +62,7 @@
       "passed": true
     },
     "manifest": "release/slm-0.5.0.json",
-    "manifest_sha256": "5d4c30fb7ee5e011d25bd056e0cf3b0fb195521358b6762074ae94cc4e0fad19",
+    "manifest_sha256": "6c92e790c9416812ff1614aa40ec6f70240af820b2d8afab23d6a66952984b68",
     "model": {
       "base_id": "Qwen/Qwen3-4B-Instruct-2507",
       "id": "cyankiwi/Qwen3-4B-Instruct-2507-AWQ-4bit",
@@ -77,14 +77,14 @@
     "signature_verified": true
   },
   "source": {
-    "commit": "ca3c88bc8cb20988c697517691c6285ff44857a8",
+    "commit": "46ad529043241c5bf0f5ba9c91b73f4a4a550e37",
     "dirty": false
   },
   "tests": {
     "errors": 0,
     "failures": 0,
     "ok": true,
-    "ran": 106,
+    "ran": 112,
     "skipped": 0
   }
 }
