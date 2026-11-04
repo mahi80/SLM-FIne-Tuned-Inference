@@ -41,7 +41,7 @@ spec:
             - name: POLICY_FILE
               value: /app/config/policy.yaml
             - name: TENANTS_FILE
-              value: /app/config/tenants.yaml
+              value: /app/secrets/tenants.yaml
             - name: AUDIT_FILE
               value: /var/lib/slm/audit.jsonl
             - name: PYTHONDONTWRITEBYTECODE
@@ -82,9 +82,11 @@ spec:
             - name: policy
               mountPath: /app/config
             # Tenant keys are not in Git. The Secret is created out of band.
+            # It gets its own directory: a subPath mount nested inside the
+            # read-only ConfigMap mount fails at container start ("not a
+            # directory") because the kubelet cannot create the bind target.
             - name: tenants
-              mountPath: /app/config/tenants.yaml
-              subPath: tenants.yaml
+              mountPath: /app/secrets
               readOnly: true
             - name: audit
               mountPath: /var/lib/slm

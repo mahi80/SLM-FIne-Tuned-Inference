@@ -127,6 +127,25 @@ class SecurityChecks(unittest.TestCase):
         self.assertTrue(any("hostPath" in error for error in errors))
 
 
+class MountChecks(unittest.TestCase):
+    def test_nested_mount_is_rejected(self):
+        doc = deployment()
+        doc["spec"]["template"]["spec"]["containers"][0]["volumeMounts"] = [
+            {"name": "policy", "mountPath": "/app/config"},
+            {"name": "tenants", "mountPath": "/app/config/tenants.yaml"},
+        ]
+        errors = vd.check_mounts([doc])
+        self.assertTrue(any("is mounted inside /app/config" in e for e in errors))
+
+    def test_sibling_mounts_are_accepted(self):
+        doc = deployment()
+        doc["spec"]["template"]["spec"]["containers"][0]["volumeMounts"] = [
+            {"name": "policy", "mountPath": "/app/config"},
+            {"name": "tenants", "mountPath": "/app/secrets"},
+        ]
+        self.assertEqual(vd.check_mounts([doc]), [])
+
+
 class ResourceChecks(unittest.TestCase):
     def test_requests_and_limits_are_required(self):
         errors = vd.check_resources([deployment(resources={"requests": {"cpu": "1"}, "limits": {}})])

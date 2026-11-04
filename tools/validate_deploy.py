@@ -245,6 +245,29 @@ def check_probes(docs: list[dict]) -> list[str]:
     return errors
 
 
+def check_mounts(docs: list[dict]) -> list[str]:
+    """Nested volume mounts fail on a real kubelet, not in review.
+
+    A subPath mount inside a read-only ConfigMap mount cannot be created
+    ("not a directory"), so every mount gets its own directory.
+    """
+    errors = []
+    for doc in workloads(docs):
+        for container in containers(pod_spec(doc)):
+            paths = [
+                str(mount.get("mountPath", "")).rstrip("/")
+                for mount in container.get("volumeMounts") or []
+            ]
+            for outer in paths:
+                for inner in paths:
+                    if inner != outer and inner.startswith(f"{outer}/"):
+                        errors.append(
+                            f"{label(doc)} container {container.get('name')}: "
+                            f"{inner} is mounted inside {outer}"
+                        )
+    return errors
+
+
 def check_services(docs: list[dict]) -> list[str]:
     errors = []
     names = set()
@@ -421,6 +444,7 @@ def validate(docs: list[dict], overlay: str, policy_path: Path) -> list[str]:
         *check_security(docs),
         *check_resources(docs),
         *check_probes(docs),
+        *check_mounts(docs),
         *check_services(docs),
         *check_policy_binding(docs, policy_path),
         *check_gateway_state(docs),
