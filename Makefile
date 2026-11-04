@@ -6,7 +6,8 @@ DC := docker compose
 .PHONY: help env gpu-check build up down logs ps test smoke smoke-gateway smoke-policy metrics health health-gateway clean \
         adapter-data adapter-train adapters adapter-eval adapter-smoke \
         bench eval-baseline eval-gate cost \
-        deploy-images deploy-render deploy-validate deploy-secret
+        deploy-images deploy-render deploy-validate deploy-secret \
+        release-key release-build release-sign release-verify release release-check signoff
 
 help: ## Show available targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -43,7 +44,7 @@ smoke-gateway: ## Smoke-test all tiers through the gateway
 smoke-policy: ## Check admission, canary stability and the audit chain
 	@python scripts/smoke_policy.py
 
-test: ## Run the router, eval, cost and deployment unit tests
+test: ## Run the router, eval, cost, deployment and release unit tests
 	PYTHONPATH=src python -m unittest discover -s tests -v
 
 bench: ## Run the tier benchmark matrix (writes bench/results)
@@ -84,6 +85,29 @@ deploy-secret: ## Create the tenant Secret from the gitignored local file
 	kubectl -n slm-fabric create secret generic slm-tenants \
 		--from-file=tenants.yaml=config/tenants.yaml \
 		--dry-run=client -o yaml | kubectl apply -f -
+
+release-key: ## Generate the Ed25519 release signing keypair (private key is gitignored)
+	PYTHONPATH=src python -m registry keygen
+
+release-build: ## Build the release manifest from artifacts and the gate report
+	PYTHONPATH=src python -m registry build --force
+
+release-sign: ## Sign the manifest with release/keys/release.ed25519.pem
+	PYTHONPATH=src python -m registry sign
+
+release-verify: ## Verify the manifest signature and required fields
+	PYTHONPATH=src python -m registry verify
+
+release: release-build release-sign release-verify ## Build, sign and verify a release
+
+release-check: ## Check that rendered overlays, evidence and compose match the signed release
+	PYTHONPATH=src python -m tools.validate_release
+
+signoff: ## Run every gate and rewrite docs/signoff/evidence.json
+	PYTHONPATH=src python -m unittest discover -s tests
+	python tools/validate_deploy.py
+	PYTHONPATH=src python -m tools.validate_release
+	PYTHONPATH=src python -m tools.build_signoff
 
 metrics: ## Print a sample of gateway metrics
 	@curl -s http://localhost:8020/metrics | grep -E '^gateway_' | head -20

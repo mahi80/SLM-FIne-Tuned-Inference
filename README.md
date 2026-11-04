@@ -3,11 +3,13 @@
 Private, provider-agnostic serving for fine-tuned small language models — a runnable
 reference platform, not a slide deck.
 
-**Status:** Phase 5 of 6 — GPU tier, gateway, simulated CPU and cloud tiers, observability,
+**Status:** Phase 6 of 6 — GPU tier, gateway, simulated CPU and cloud tiers, observability,
 two QLoRA adapters, a policy-driven router with canary, breakers and a hash-chained audit
 trail, a benchmark harness, a golden-set release gate and an ownership cost model are live
-and measured. The same stack now ships as Kustomize overlays for OpenShift, vanilla
-Kubernetes and air-gapped installs, reconciled by Argo CD and enforced by Kyverno.
+and measured. The stack ships as Kustomize overlays for OpenShift, vanilla Kubernetes and
+air-gapped installs, reconciled by Argo CD and enforced by Kyverno. Releases are now signed
+manifests chained to the policy, adapters, gate artifact and rendered deployment, with C4
+views and an architecture sign-off pack that states what is measured and what is not.
 
 ---
 
@@ -50,7 +52,9 @@ the distinction explicit:
 | Cloud burst tier (L4 profile) | **Modelled and wired** — a standby that residency usually excludes | `tiersim-cloud`, `x-simulated: true` |
 | OpenShift / vanilla / air-gap deployment | **Static validation** — three overlays render and pass policy checks; no cluster available | `deploy/kustomize`, `make deploy-validate` |
 | GitOps, release hooks and admission policy | **Static validation** — Argo CD app-of-apps, Kyverno ClusterPolicies, PostSync eval gate | `deploy/gitops`, `deploy/policies` |
-| Signed model releases, C4 diagrams and sign-off pack | Planned (Phase 6) | — |
+| Signed release manifest (Ed25519, canonical JSON, drift checks) | **Measured** | `make release`, `make release-check`, `release/slm-0.5.0.json` |
+| C4 views, threat model, acceptance and sign-off pack | **Documented** — review artifacts, not runtime evidence | `docs/architecture/c4.md`, `docs/signoff/` |
+| CI pipeline (tests + both validators) | **Committed, not executed here** — no Actions run from this environment | `.github/workflows/ci.yml` |
 
 Numbers from a simulated tier are labelled `MODELLED` everywhere they appear.
 
@@ -98,6 +102,8 @@ make adapter-eval  # base vs v1 vs v2 on the held-out triage set
 make bench         # tier benchmark matrix; writes bench/results
 make eval-gate     # golden-set release gate with drift against eval-baseline.json
 make cost          # ownership cost per 1M output tokens
+make release-check # signed manifest = policy = adapters = overlays = compose
+make signoff       # tests, both validators, signature verify; writes docs/signoff/evidence.json
 make logs          # follow all services
 make down          # stop (model cache and dashboards are kept)
 ```
@@ -195,6 +201,63 @@ Kustomize rendering plus assertions, not an applied cluster and not a live Kyver
 admission. Images are pinned by tag rather than digest (production should rewrite them at
 promotion), PVCs rely on the cluster default storage class, and the gateway is deliberately
 one replica. The full rationale is in [ADR-0006](docs/adr/ADR-0006-deployment-gitops.md).
+
+---
+
+## Signed releases and the review pack
+
+A release here is a manifest, not a git tag. `make release` writes
+`release/slm-0.5.0.json` — canonical JSON that pins the base model revision, the digest of
+every adapter file, the image tags, the policy version and hash, the gate artifact and its
+verdict, the benchmark and cost evidence, and the commit the manifest was built from. It
+refuses to build if the release gate did not pass.
+
+```bash
+make release-key   # once per environment: generate an Ed25519 key pair (private key gitignored)
+make release       # build, sign, verify
+make release-check # signed manifest = rendered overlays = compose pins
+```
+
+```text
+$ make release-check
+note vanilla: adapter promotion and the in-cluster gate are operator-run; the overlay deliberately carries no PostSync hooks
+OK   release slm-0.5.0 = signed manifest = 3 overlay(s)
+```
+
+The check re-renders all three overlays and fails on drift: a changed policy file, a golden
+set edited after the gate ran, a re-trained adapter, a stale gate artifact, a compose tag
+that no longer matches the manifest. Each of those is a silent-release bug that a tag would
+not catch, and each has a deliberate test.
+
+```text
+$ make release-verify
+OK   release/slm-0.5.0.json: signature verified
+release  slm-0.5.0 gate=PASS exact=0.833
+```
+
+Signing is Ed25519 over the canonical bytes, verified offline with the committed public
+key, which is the reason it was chosen over cosign for air-gapped sites ([ADR-0007](docs/adr/ADR-0007-signed-releases.md)).
+It proves the manifest bytes were not altered and records the gate that authorised them.
+It does **not** prove the weights match the revision, nor who signed: that needs the key in
+an HSM/KMS and digest-pinned images, both named as conditions in the acceptance record.
+
+The review pack answers the questions a reviewer actually asks, in order:
+
+| Document | Question it answers |
+|---|---|
+| [requirements.md](docs/signoff/requirements.md) | What was asked, requirement by requirement, and which ones are not met |
+| [c4.md](docs/architecture/c4.md) | What the system is: L1–L4 views, runtime sequence, trust boundaries |
+| [acceptance.md](docs/signoff/acceptance.md) | What was verified (A-01…A-15), what was not (N-01…N-10), and the conditions (C-01…C-09) |
+| [threat-model.md](docs/signoff/threat-model.md) | What can go wrong, by asset, actor and entry point |
+| [risks.md](docs/signoff/risks.md) | Which risks are accepted, with anchors into the code |
+| [operations.md](docs/signoff/operations.md) | How it runs: SLOs, alerts, runbooks, backups |
+| [release-process.md](docs/signoff/release-process.md) | Who builds, signs, promotes and rolls back |
+| [evidence.json](docs/signoff/evidence.json) | Generated: test counts, signature status and artifact hashes |
+
+The verdict is **accepted as a reference platform with conditions** — not a production
+acceptance. CPU and cloud throughput are modelled, OpenShift/Kyverno/Argo behaviour is
+statically validated rather than observed, and there is no multi-replica gateway. Those are
+stated at the top of the record rather than buried.
 
 ---
 
@@ -609,18 +672,20 @@ config/policy.yaml               versioned routing policy: aliases, candidates, 
 config/bench.yaml                benchmark targets, concurrency levels and prompt
 config/eval-gates.yaml           release floors and drift allowances
 config/cost.yaml                 ownership assumptions: capex, power, utilisation, workload
+config/release.yaml              release identity: model pin, images, adapters, gate, evidence
 config/tenants.example.yaml      tenant keys, quotas, region, data class; tenants.yaml is gitignored
 scripts/smoke.py                 GPU tier smoke test
 scripts/smoke_gateway.py         end-to-end test through the gateway, all tiers
 scripts/smoke_policy.py          admission, residency, canary stability, audit chain
 scripts/smoke_adapters.py        adapter aliases and contract check through the gateway
 scripts/load_adapters.py         runtime load of every adapter into vLLM
-tests/                           router, eval, cost and deployment unit tests (stdlib unittest)
+tests/                           router, eval, cost, deployment and release unit tests (stdlib unittest)
+.github/workflows/ci.yml         tests, deployment validator and release chain on every push
 docker/                          gateway, simulator, QLoRA training and eval images
 src/gateway/                     OpenAI-compatible API, auth, quotas, proxy, policy use, audit
 src/router/                      policy model, admission, canary, breakers, hash-chained audit
 src/tiersim/                     calibrated CPU / cloud tier simulator
-src/registry/                    signed model release manifests
+src/registry/                    signed release manifests: canonical JSON, Ed25519, drift checks
 src/bench/                       closed-loop load generator and report rendering
 src/eval/                        golden-set scoring, floors and drift gate
 src/cost/                        ownership TCO, utilisation sweep and break-even
@@ -629,7 +694,10 @@ deploy/kustomize/                base, openshift/vanilla/airgap overlays, shared
 deploy/openshift/airgap/         IDMS/ITMS, mirrored image list and mirror script
 deploy/policies/                 Kyverno ClusterPolicies enforced at admission
 deploy/gitops/                   Argo CD project, app-of-apps and child Applications
+release/                         signed release manifest, detached signature and public key
 tools/validate_deploy.py         static checks over the rendered overlays
+tools/validate_release.py        release chain: manifest = overlays = compose, signature
+tools/build_signoff.py           runs tests, verifies the signature, writes the evidence record
 finetune/prompt.py               task contract: system prompt, schema, taxonomy
 finetune/dataset.py              deterministic triage dataset generator
 finetune/train_qlora.py          QLoRA trainer (4-bit NF4, assistant-only loss)
@@ -638,7 +706,8 @@ finetune/data/                   generated train-v1, train-v2 and eval splits
 adapters/                        trained adapter artifacts (gitignored, reproducible)
 bench/results/                   recorded benchmarks, eval gate and cost artifacts
 docs/adr/                        architecture decision records
-docs/signoff/                    architecture review template and completed review
+docs/architecture/c4.md          C4 context, container, component and deployment views
+docs/signoff/                    requirements, acceptance, threat model, risks, operations, evidence
 ```
 
 ---
@@ -781,6 +850,38 @@ matter — untagged images, privileged pods, GPU request/limit drift, a policy U
 Service, a stale policy ConfigMap, an extra gateway replica — and the integration tests
 render all three overlays. The checks run without a cluster; that is also their limit.
 
+### Phase 6
+
+**A release is the manifest, not the tag.** A tag names one artifact and says nothing about
+which policy, adapters, golden set or gate artifact were in play when it was produced. The
+signed manifest binds all of them, so promoting a release promotes a tested combination
+rather than whatever happened to be on the branch.
+
+**Canonical bytes before signatures.** The signature covers a deterministic JSON encoding,
+not the pretty-printed file. Reformatting the manifest does not invalidate it; changing one
+byte of content does. This is what makes signing useful rather than ceremonial, and the
+tests assert both directions.
+
+**Signing is offline and boring on purpose.** Ed25519 over the bytes, verified with the
+public key committed to the repo. Cosign and Sigstore are better provenance systems but
+need network trust roots, which the air-gapped overlay cannot assume. What this proves is
+stated as narrowly as it should be: integrity of the manifest, and the gate that authorised
+it. Key custody in an HSM is a condition, not a claim.
+
+**The gate cannot be bypassed from the CLI.** There is no `--allow-failing-gate`. A failing
+release cannot produce a manifest at all, because a "signed record of a failed gate" is a
+forensic artifact that belongs in the CI log, not in the registry next to passing releases.
+
+**The review pack states what is missing.** Requirements are mapped one by one with explicit
+`Not demonstrated` and `N/A` statuses; acceptance lists N-01…N-10 beside A-01…A-15; each
+verdict points at the risk it accepts. A sign-off that only lists successes is not a
+sign-off, it is marketing.
+
+**CI runs the same commands a reviewer does.** The workflow is tests, `validate_deploy`,
+`validate_release`, `registry verify` — no bespoke checks that exist only in CI. It is
+committed and reviewed but has not been executed from this environment; that is recorded in
+the acceptance record rather than implied to have run.
+
 ---
 
 ## Roadmap
@@ -793,7 +894,7 @@ render all three overlays. The checks run without a cluster; that is also their 
 | 3 | Router policy engine, canary, audit trail | **Done** |
 | 4 | Benchmarks, golden-set eval gate, ownership cost model | **Done** |
 | 5 | OpenShift / vanilla / air-gap manifests, GitOps, admission policy | **Done** |
-| 6 | C4 diagrams, signed releases, architecture sign-off pack | Next |
+| 6 | C4 diagrams, signed releases, architecture sign-off pack | **Done** |
 
 ---
 

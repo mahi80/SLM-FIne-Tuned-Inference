@@ -12,3 +12,8 @@ deploy/rendered/
 
 # Trained adapter weights are artifacts, not source. Reproduce with `make adapter-train`.
 adapters/*/
+
+# Release signing keys never enter the repository. The public half is committed
+# so a release can be verified without access to the signer.
+release/keys/*.pem
+!release/keys/*.pub.pem

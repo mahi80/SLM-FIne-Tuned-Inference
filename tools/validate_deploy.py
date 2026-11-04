@@ -43,6 +43,29 @@ CLUSTER_SCOPED = {
 
 VLLM_IMAGE = "vllm/vllm-openai:v0.33.0"
 MODEL_REVISION = "b37d1ccb77e27a70fe4222d995fda27940eead5a"
+
+
+def release_identity(path: Path = REPO / "config/release.yaml") -> tuple[str, str, str]:
+    """Pinned runtime, revision and served name come from the release identity,
+    not from constants in this file, so the static checks and the signed
+    manifest cannot drift apart."""
+    data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    model = data.get("model") or {}
+    vllm = next(
+        (image for image in data.get("images") or [] if image.get("name") == "vllm/vllm-openai"),
+        None,
+    )
+    try:
+        return (
+            f"vllm/vllm-openai:{vllm['tag']}",
+            str(model["revision"]),
+            str(model["served_name"]),
+        )
+    except (KeyError, TypeError) as exc:
+        raise RuntimeError(f"{path} does not declare the vLLM runtime and model pin") from exc
+
+
+VLLM_IMAGE, MODEL_REVISION, SERVED_MODEL_NAME = release_identity()
 REQUIRED_DEPLOYMENTS = {"vllm-gpu", "gateway", "tiersim-cpu", "tiersim-cloud"}
 REQUIRED_SERVICES = {"vllm-gpu", "gateway", "tiersim-cpu", "tiersim-cloud"}
 
@@ -131,7 +154,10 @@ def check_model_pin(docs: list[dict]) -> list[str]:
     errors = []
     for doc in workloads(docs):
         spec = pod_spec(doc)
-        args = " ".join(str(a) for c in spec.get("containers") or [] for a in (c.get("args") or []))
+        arg_list = [
+            str(a) for c in spec.get("containers") or [] for a in (c.get("args") or [])
+        ]
+        args = " ".join(arg_list)
         if "--served-model-name" not in args:
             continue
         for container in spec.get("containers") or []:
@@ -139,6 +165,9 @@ def check_model_pin(docs: list[dict]) -> list[str]:
                 errors.append(f"{label(doc)}: vLLM image is {container.get('image')}, expected {VLLM_IMAGE}")
         if MODEL_REVISION not in args:
             errors.append(f"{label(doc)}: model revision is not pinned to {MODEL_REVISION}")
+        index = arg_list.index("--served-model-name")
+        if index + 1 >= len(arg_list) or arg_list[index + 1] != SERVED_MODEL_NAME:
+            errors.append(f"{label(doc)}: served model name is not {SERVED_MODEL_NAME}")
         if "--enable-lora" not in args:
             errors.append(f"{label(doc)}: multi-LoRA serving is not enabled")
     return errors

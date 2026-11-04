@@ -1,0 +1,48 @@
+# Release identity: the one place the bundle version, model revision and
+# artifact names are declared. `make release` turns this file plus the gate
+# and benchmark artifacts into a signed manifest under release/.
+#
+# The manifest is not a second copy of config/policy.yaml: it pins the policy
+# by digest, so a policy edit without a new release is visible as drift.
+
+release_id: slm-0.5.0
+
+model:
+  id: cyankiwi/Qwen3-4B-Instruct-2507-AWQ-4bit
+  base_id: Qwen/Qwen3-4B-Instruct-2507
+  revision: b37d1ccb77e27a70fe4222d995fda27940eead5a
+  quantization: awq-w4a16
+  served_name: slm-small
+
+images:
+  - name: vllm/vllm-openai
+    tag: v0.33.0
+  - name: slm/gateway
+    tag: "0.5.0"
+  - name: slm/tiersim
+    tag: "0.5.0"
+  - name: slm/eval
+    tag: "0.5.0"
+
+adapters:
+  - name: triage-v1
+    served_name: triage-v1
+  - name: triage-v2
+    served_name: triage-v2
+
+policy: config/policy.yaml
+
+# The gate is re-read at build time, not trusted from a log line: a manifest
+# cannot be produced for a release whose gate failed.
+gate:
+  model: slm-triage-v2
+  # The in-cluster hook talks to vLLM directly, so it addresses the adapter by
+  # its served name rather than through a gateway alias.
+  in_cluster_model: triage-v2
+  report: bench/results/eval-gate.json
+  config: config/eval-gates.yaml
+  baseline: bench/results/eval-baseline.json
+
+evidence:
+  benchmark: bench/results/tier-comparison.json
+  cost: bench/results/cost-model.json
