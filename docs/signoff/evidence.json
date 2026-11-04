@@ -1,0 +1,90 @@
+{
+  "artifacts": {
+    "bench/results/cost-model.json": "5f3f5089fcc8ea8a37d008f70b1c86e1a769147d13ae714fa59ec3a2098d5787",
+    "bench/results/eval-baseline.json": "d345a5eea67a6e2ac5999de147649e706427044a66085e88280078a1e920d1f2",
+    "bench/results/eval-gate.json": "f17246d81c6343e615dfc6e6e8cdfee12a16b102d2817b63cb5f037b4a066d2a",
+    "bench/results/tier-comparison.json": "7a04eb9ab0eff29ce4e8950e053e91eba160a57980a30797c072adcb9af97c80",
+    "compose.yaml": "e1c8212639e6d562fdf42d79b984fae1550a31b3e441ed7f3263447e77df23a7",
+    "config/cost.yaml": "fc9bfb7777ae5b703732d9d9954f80d1026fdc1e226166e9104f1d61bc434622",
+    "config/eval-gates.yaml": "50fee941f061743c74fd0ae2f8bb0511ee85cbf8f7be69d445ed19321ae2842e",
+    "config/policy.yaml": "b0f1fc800bf779e33e2ac63d60b9c1ee213cef3ac88c19f4d5fb43127c1c097c",
+    "config/release.yaml": "030627fc35ad742e8115cf019cd577157bea0972414103d35c561f78b7daefbd",
+    "src/eval/golden.jsonl": "747ffd5dab7783db1b0e2c2e880f7ef62fb5594283af09f6d40e8693262d531d"
+  },
+  "environment": {
+    "openssl": "OpenSSL 3.5.7 9 Jun 2026 (Library: OpenSSL 3.5.7 9 Jun 2026)",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python": "3.12.10"
+  },
+  "generated_at": "2026-11-04T15:55:59Z",
+  "notes": [
+    "Artifacts are hashed as they exist in the working tree at generation time.",
+    "The release signature is verified against the committed public key, not a trust root.",
+    "Evidence generated from the commit named in source; it is committed in the following commit."
+  ],
+  "release": {
+    "adapters": [
+      {
+        "name": "triage-v1",
+        "sha256": "37493257a01dbb5daca472b93ddc1887e3ab428abd5670bbd82f51eb563f0da1"
+      },
+      {
+        "name": "triage-v2",
+        "sha256": "a459129539cf1573736a011ae172f6e2e88c24366e597d4c5828ce3ab4fca159"
+      }
+    ],
+    "canonical_sha256": "7b6dbb774a7008d23698e95688d948c6eddb22fbefb9a492226557e8285e0e76",
+    "gate": {
+      "checks_total": 13,
+      "metrics": {
+        "exact_labels_rate": 0.833,
+        "schema_rate": 1.0,
+        "slices": {
+          "clean": {
+            "exact": 0.875,
+            "n": 8,
+            "schema": 1.0
+          },
+          "hard": {
+            "exact": 1.0,
+            "n": 8,
+            "schema": 1.0
+          },
+          "held-out": {
+            "exact": 0.625,
+            "n": 8,
+            "schema": 1.0
+          }
+        },
+        "strict_json_rate": 1.0
+      },
+      "model": "slm-triage-v2",
+      "passed": true
+    },
+    "manifest": "release/slm-0.5.0.json",
+    "manifest_sha256": "0858142b5c9b9c13461b2539469811f9955f6d30e510d9493059a1d2dc82c7e7",
+    "model": {
+      "base_id": "Qwen/Qwen3-4B-Instruct-2507",
+      "id": "cyankiwi/Qwen3-4B-Instruct-2507-AWQ-4bit",
+      "quantization": "awq-w4a16",
+      "revision": "b37d1ccb77e27a70fe4222d995fda27940eead5a",
+      "served_name": "slm-small"
+    },
+    "policy_version": "2026-11-04.1",
+    "release_id": "slm-0.5.0",
+    "signature": "slm-0.5.0.json.sig",
+    "signature_detail": "signature verified",
+    "signature_verified": true
+  },
+  "source": {
+    "commit": "d2cf0711d57e2143ff64bd6e137c4e799a12c5a3",
+    "dirty": false
+  },
+  "tests": {
+    "errors": 0,
+    "failures": 0,
+    "ok": true,
+    "ran": 102,
+    "skipped": 0
+  }
+}

@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "release_id": "slm-0.5.0",
+  "created_at": "2026-11-04T15:55:28Z",
+  "source": {
+    "commit": "d2cf0711d57e2143ff64bd6e137c4e799a12c5a3",
+    "dirty": false
+  },
+  "model": {
+    "id": "cyankiwi/Qwen3-4B-Instruct-2507-AWQ-4bit",
+    "base_id": "Qwen/Qwen3-4B-Instruct-2507",
+    "revision": "b37d1ccb77e27a70fe4222d995fda27940eead5a",
+    "quantization": "awq-w4a16",
+    "served_name": "slm-small"
+  },
+  "images": [
+    {
+      "name": "vllm/vllm-openai",
+      "tag": "v0.33.0"
+    },
+    {
+      "name": "slm/gateway",
+      "tag": "0.5.0"
+    },
+    {
+      "name": "slm/tiersim",
+      "tag": "0.5.0"
+    },
+    {
+      "name": "slm/eval",
+      "tag": "0.5.0"
+    }
+  ],
+  "adapters": [
+    {
+      "name": "triage-v1",
+      "served_name": "triage-v1",
+      "path": "adapters/triage-v1",
+      "sha256": "37493257a01dbb5daca472b93ddc1887e3ab428abd5670bbd82f51eb563f0da1",
+      "files": [
+        {
+          "path": "adapter_config.json",
+          "sha256": "be238c874c6f4c88ee15d33e042dbacc5220c70c9eb0013e431fa4ac1dab5b63",
+          "size": 1183
+        },
+        {
+          "path": "adapter_model.safetensors",
+          "sha256": "54ad55fc5aa384b97c6860a58a4342f1d7819af04e825e597852c444ce15ae39",
+          "size": 132187888
+        },
+        {
+          "path": "README.md",
+          "sha256": "678742275e6a4d4a361eb467bc11c04c21794cc63a67e7f0f78b989dfd6d6bfb",
+          "size": 5208
+        },
+        {
+          "path": "training.json",
+          "sha256": "67595d6e765dd98bfa721172ca80fc0b7125a75f6d507504c7c14869b3ae1694",
+          "size": 3752
+        }
+      ]
+    },
+    {
+      "name": "triage-v2",
+      "served_name": "triage-v2",
+      "path": "adapters/triage-v2",
+      "sha256": "a459129539cf1573736a011ae172f6e2e88c24366e597d4c5828ce3ab4fca159",
+      "files": [
+        {
+          "path": "adapter_config.json",
+          "sha256": "9956ac96a55be1023c9eb979d67031a009c18fe842f12b56b284248892ca8f8b",
+          "size": 1183
+        },
+        {
+          "path": "adapter_model.safetensors",
+          "sha256": "aa892d8e5c6d60efc0653b47fa7296bc41996dd65f37dd2d96cdd91945ebc43e",
+          "size": 132187888
+        },
+        {
+          "path": "README.md",
+          "sha256": "678742275e6a4d4a361eb467bc11c04c21794cc63a67e7f0f78b989dfd6d6bfb",
+          "size": 5208
+        },
+        {
+          "path": "training.json",
+          "sha256": "ab737dbeadccd14a19f220aaa325822d28b4550eb553ed7960c417e7b4a06f55",
+          "size": 3870
+        }
+      ]
+    }
+  ],
+  "policy": {
+    "path": "config/policy.yaml",
+    "version": "2026-11-04.1",
+    "sha256": "b0f1fc800bf779e33e2ac63d60b9c1ee213cef3ac88c19f4d5fb43127c1c097c"
+  },
+  "gate": {
+    "report": "bench/results/eval-gate.json",
+    "report_sha256": "f17246d81c6343e615dfc6e6e8cdfee12a16b102d2817b63cb5f037b4a066d2a",
+    "config": "config/eval-gates.yaml",
+    "config_sha256": "50fee941f061743c74fd0ae2f8bb0511ee85cbf8f7be69d445ed19321ae2842e",
+    "model": "slm-triage-v2",
+    "golden": "src/eval/golden.jsonl",
+    "golden_sha256": "747ffd5dab7783db1b0e2c2e880f7ef62fb5594283af09f6d40e8693262d531d",
+    "n": 24,
+    "passed": true,
+    "checks_total": 13,
+    "failed_checks": [],
+    "metrics": {
+      "strict_json_rate": 1.0,
+      "schema_rate": 1.0,
+      "exact_labels_rate": 0.833,
+      "slices": {
+        "clean": {
+          "n": 8,
+          "schema": 1.0,
+          "exact": 0.875
+        },
+        "hard": {
+          "n": 8,
+          "schema": 1.0,
+          "exact": 1.0
+        },
+        "held-out": {
+          "n": 8,
+          "schema": 1.0,
+          "exact": 0.625
+        }
+      }
+    },
+    "baseline": "bench/results/eval-baseline.json",
+    "baseline_sha256": "d345a5eea67a6e2ac5999de147649e706427044a66085e88280078a1e920d1f2",
+    "in_cluster_model": "triage-v2"
+  },
+  "benchmark": {
+    "path": "bench/results/tier-comparison.json",
+    "sha256": "7a04eb9ab0eff29ce4e8950e053e91eba160a57980a30797c072adcb9af97c80",
+    "gpu_output_tps_max": 1123.2,
+    "gpu_concurrency_at_max": 12,
+    "runs": 12
+  },
+  "cost": {
+    "path": "bench/results/cost-model.json",
+    "sha256": "5f3f5089fcc8ea8a37d008f70b1c86e1a769147d13ae714fa59ec3a2098d5787",
+    "requests_per_day": 20000,
+    "owned_usd_per_1m_at_workload": 2.2428,
+    "break_even_requests_per_day": {
+      "cpu-xeon-4b": 2839.0,
+      "gpu-l4-4b": 56069.0
+    }
+  },
+  "notes": [
+    "Adapter weights are training artifacts and are not committed; the manifest pins their digests.",
+    "CPU, cloud and GPU-reference benchmark tiers are MODELLED; measured rows are labelled in tier-comparison.json.",
+    "The source commit names the tree the manifest was built from; it is not the commit that contains the manifest."
+  ]
+}
