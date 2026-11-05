@@ -210,6 +210,75 @@ with evidence links for every row, is in
 
 ---
 
+## Taking it to real infrastructure
+
+This repository ships the application, its policy and the node-pool *contracts*. It does not
+ship a cluster, Terraform, or a credential. The snippets under
+[`deploy/cloud/`](deploy/cloud/README.md) assume a cluster already exists and add or label
+capacity inside it.
+
+### Baseline every target needs
+
+| Requirement | Why | Check |
+|---|---|---|
+| Kubernetes 1.31+ (1.34 verified on kind), or OpenShift 4.x | The manifests use `karpenter.sh/v1`, `subPath` Secret mounts and PSS `restricted`; the OpenShift overlay is statically validated, not run | `kubectl version` |
+| One GPU node class and one CPU node class | `vllm-gpu` selects the GPU pool; the simulators prefer the CPU pool | `kubectl get nodes -L nvidia.com/gpu.present` |
+| NVIDIA GPU Operator (driver, device plugin, NFD) | Nothing in this repo installs a driver; without the plugin `nvidia.com/gpu` never appears in `allocatable` | `kubectl get node <gpu> -o jsonpath='{.status.allocatable.nvidia\.com/gpu}'` |
+| A storage class that supports `ReadWriteMany` | One replica runs on `ReadWriteOnce`; a second GPU replica shares the model and adapter claims, and the autoscaling component patches them to RWX | `kubectl get storageclass` |
+| Argo CD and Kyverno, or your own equivalent | GitOps sync waves and the six `Enforce` policies | `kubectl get crd \| grep -E 'argoproj\|kyverno'` |
+| Route/Ingress with TLS, and a default-deny NetworkPolicy | The gateway is reached over the edge, and egress is closed by default | `make cluster-health` |
+| KEDA (optional, GPU pool only) | Queue-depth and KV-cache autoscaling; without it the GPU tier stays at one replica | `kubectl get scaledobject -n slm-fabric` |
+
+### Provider credentials and quotas
+
+Node pools are created by whoever owns the cluster. Use a role or service principal, never a
+long-lived key committed or pasted anywhere.
+
+| Provider | What the repo gives you | Credential you need | Permission scope | Quota to request first |
+|---|---|---|---|---|
+| **AWS / EKS** | `deploy/cloud/aws-karpenter-nodepools.yaml` (two `NodePool`s + `EC2NodeClass`) | An IAM role assumed by SSO, CI OIDC, or `aws sts assume-role`; Karpenter's controller identity via EKS Pod Identity/IRSA | Cluster admin to install Karpenter; its controller policy from the upstream docs plus `iam:PassRole` on the node role; node role `KarpenterNodeRole-slm-fabric` with `AmazonEKSWorkerNodePolicy`, `AmazonEKS_CNI_Policy`, `AmazonEC2ContainerRegistryReadOnly`; subnets and security groups tagged `karpenter.sh/discovery=slm-fabric` | EC2 **G-family vCPUs** (`g5`/`g6`, on-demand) in the target region; the snippet caps the GPU pool at 4 GPUs |
+| **Azure / AKS** | `deploy/cloud/azure-aks-nodepools.sh` (`az aks nodepool add` ×2) | `az login` as a human, or a service principal/`az identity` used by CI | Contributor on the cluster resource group (`Microsoft.ContainerService/managedClusters/agentPools/*`), plus `Azure Kubernetes Service Cluster Admin Role` to read kubeconfig | `standardNCadsA100v4Family` vCPUs in the region (`az vm list-usage --location <region> -o table`); CPU `Ddsv5` quota |
+| **Google / GKE** | `deploy/cloud/gcp-gke-nodepools.sh` (`gcloud container node-pools create` ×2) | `gcloud auth login`, or a service account key held in your CI secret store | `roles/container.admin`, `roles/compute.admin`, `roles/iam.serviceAccountUser` on the project; node service account `roles/container.defaultNodeServiceAccount` (or a custom role with logging and monitoring) | **`nvidia-l4` GPUs** in the region (`gcloud compute regions describe <region> --format='value(quotas)'`), or A100 if you change `GPU_TYPE`; `e2-standard-8` CPU quota |
+| **On-prem / OpenShift** | `deploy/cloud/onprem-workers.sh` (labels + taints existing workers) | `oc login` as cluster admin (or an account allowed to label nodes and scale MachineSets) | `nodes` patch plus `machinesets` scale in `openshift-machine-api`; the GPU MachineSet is provisioned by the platform team | A `ReadWriteMany` storage class and enough GPUs for the replica bounds in `config/capacity.yaml` |
+
+The provider snippets install no driver and no autoscaler of their own: AWS needs Karpenter
+running, Azure and GCP use their per-pool cluster autoscalers, and on-prem nodes are added by
+a MachineSet or by hand. Every pool is joined to the app by two labels and two taints — see
+[the contract](deploy/cloud/README.md#the-contract). `make fleet-check` validates the
+inventory in `config/fleet.yaml`; `python tools/fleet_status.py --live` shows how many GPU
+nodes each cluster actually reports.
+
+### Credentials the platform itself needs
+
+These are created out of band, never committed, and every tool that reads them prints names,
+not values.
+
+| Secret | Needed for | How it is supplied |
+|---|---|---|
+| `slm-tenants` | Tenant bearer keys, RPM and admission fields | `make deploy-secret`, from the gitignored `config/tenants.yaml` |
+| `slm-backend-keys` | External provider keys, OIDC client secrets | Secret in your store; mounted at `/app/backend-keys` and named by policy `access.key` |
+| Projected token volume (optional) | `access.source: file` — a rotating service-account token | Your identity provider or platform's projected-token volume under `SLM_BACKEND_TOKEN_DIR` |
+| Backend CA bundle (optional) | A provider whose certificate does not chain to public roots | `SLM_BACKEND_CA` pointing at a mounted bundle; a configured-but-missing bundle stops the gateway |
+| `slm-keda-prometheus` | KEDA's Prometheus scaler | Created in-cluster with a token; not part of any overlay |
+
+A model provider is reachable through the gateway only if it speaks the OpenAI API at
+`/v1/chat/completions` and `/health`. OpenAI-compatible endpoints (vLLM/TGI/SGLang on your own
+GPU, Together, Fireworks, DeepInfra, OpenAI) work with one key. **Azure OpenAI, Amazon Bedrock
+and Google Vertex AI do not** — they need a thin fronting proxy, and the
+[compatibility table](deploy/cloud/README.md#which-endpoints-actually-work) says why. External
+backends also need the opt-in `cloud-egress` component and an `ipBlock` for the provider's
+current range; DNS names cannot be expressed in a NetworkPolicy.
+
+Before sending tenant traffic to any of it, run
+`PYTHONPATH=src python -m tools.check_backend --policy config/policy.yaml --keys <keys.yaml>` —
+one line per external candidate, exit 1 if any is unconfigured, unauthenticated or down.
+
+**What this repo will not do for you:** create the cluster, install Karpenter/KEDA/GPU
+Operator/Argo CD/Kyverno, buy GPU quota, or hold a credential. Those are the parts that cost
+money and need an account; everything after them is manifests in Git.
+
+---
+
 ## Results at a glance
 
 Same prompt, 64 output tokens, closed-loop, measured on an RTX 4080 Laptop (12 GB):
@@ -256,6 +325,7 @@ Full map: [repository map](docs/technical-notes.md#repository-map).
 
 | If you want | Read |
 |---|---|
+| Real clusters, IAM permissions and GPU quotas | [Taking it to real infrastructure](#taking-it-to-real-infrastructure), [deploy/cloud/README.md](deploy/cloud/README.md) |
 | Evidence, contracts and measurement detail | [docs/technical-notes.md](docs/technical-notes.md) |
 | Why each decision was made | [ADR-0001…0012](docs/adr/) — one record per choice |
 | Cluster deployment and air gap | [Kubernetes and OpenShift](docs/technical-notes.md#kubernetes-and-openshift) |
@@ -269,6 +339,9 @@ Full map: [repository map](docs/technical-notes.md#repository-map).
 - CPU and cloud throughput are **modelled**, calibrated against a documented profile.
 - OpenShift, the air-gap mirror and the release hooks are **statically validated**, not
   observed on a live cluster.
+- The AWS, Azure and GCP node-pool snippets are **contracts, not tested infrastructure**: none
+  has been applied to a real account, so quota, IAM and instance availability are unverified
+  (R-17). No external model provider or IdP has been contacted either (R-18, N-13).
 - The gateway is deliberately **one replica**: quotas, breakers and the audit chain live
   in-process. Scaling it needs a shared counter first.
 - Audit is tamper **evidence**, not prevention — the head hash needs an external, append-only

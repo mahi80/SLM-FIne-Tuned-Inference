@@ -15,6 +15,11 @@ Each snippet creates a GPU pool and a CPU pool. The names, sizes and bounds are
 examples: the contract is the two labels and two taints, which the deployment
 tree already expects.
 
+The credential, IAM role and quota each provider needs is listed in
+[Taking it to real infrastructure](../../README.md#taking-it-to-real-infrastructure).
+None of these snippets has been applied to a real account: they are contracts,
+not tested infrastructure (risk R-17).
+
 ## The contract
 
 GPU nodes
