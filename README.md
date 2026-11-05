@@ -16,6 +16,15 @@ published to GHCR by CI, and every workload image is pinned by digest in the sig
 
 ---
 
+## Watch the explainer
+
+A 75-second walkthrough, from the customer problem to the four decisions a private LLM
+platform has to get right: tier routing, tenant isolation, release and audit.
+
+https://github.com/user-attachments/assets/3dd2821f-45c3-4473-a361-46caeabf3b47
+
+---
+
 ## Thesis
 
 A 1–8B model, fine-tuned on a narrow enterprise task and served with the right runtime
