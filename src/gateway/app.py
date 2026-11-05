@@ -32,13 +32,18 @@ from router.policy import Candidate, Policy
 
 from . import metrics
 from .auth import TenantRegistry
+from .backends import BackendAccess, open_upstream, probe
 from .config import Tenant, load_tenants
 
 POLICY_FILE = os.environ.get("POLICY_FILE", "/app/config/policy.yaml")
 TENANTS_FILE = os.environ.get("TENANTS_FILE", "/app/config/tenants.yaml")
 AUDIT_FILE = os.environ.get("AUDIT_FILE", "/var/lib/slm/audit.jsonl")
+BACKEND_KEYS_FILE = os.environ.get("SLM_BACKEND_KEYS", "/app/backend-keys/keys.yaml")
+BACKEND_CA_FILE = os.environ.get("SLM_BACKEND_CA") or None
+PROBE_INTERVAL_S = float(os.environ.get("SLM_PROBE_INTERVAL_S", "30"))
 
-store = PolicyStore(POLICY_FILE)
+access = BackendAccess.load(BACKEND_KEYS_FILE, BACKEND_CA_FILE)
+store = PolicyStore(POLICY_FILE, backend_ready=access.ready)
 tenant_list = load_tenants(TENANTS_FILE)
 for tenant in tenant_list:
     unknown = set(tenant.allowed_aliases) - set(store.policy.aliases)
@@ -59,16 +64,51 @@ TIMEOUT = httpx.Timeout(connect=5.0, read=300.0, write=30.0, pool=5.0)
 STREAM_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 
 
+async def probe_external_backends(app: FastAPI) -> None:
+    """Feed remote health into the same breakers the request path uses.
+
+    Without this a dead cloud backend would be discovered by a tenant request.
+    An unconfigured candidate is skipped, not marked down: it is already vetoed
+    by admission and must not poison a breaker it can never use.
+    """
+    while True:
+        policy = store.policy
+        for alias in policy.aliases.values():
+            for candidate in alias.candidates.values():
+                if not candidate.external:
+                    continue
+                if not access.ready(candidate):
+                    metrics.BACKEND_PROBE.labels(
+                        alias.name, candidate.name, "unconfigured"
+                    ).inc()
+                    continue
+                healthy = await probe(app.state.client, candidate, access.headers(candidate))
+                metrics.BACKEND_PROBE.labels(
+                    alias.name, candidate.name, "up" if healthy else "down"
+                ).inc()
+                key_ = breakers.key(alias.name, candidate.name)
+                if healthy:
+                    store.breakers.record_success(key_)
+                else:
+                    store.breakers.record_failure(key_)
+                update_breaker(alias.name, candidate.name)
+        await asyncio.sleep(PROBE_INTERVAL_S)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.client = httpx.AsyncClient(
         timeout=TIMEOUT,
         limits=httpx.Limits(max_connections=256, max_keepalive_connections=64),
+        verify=access.verify,
     )
     app.state.shadow_tasks = set()
+    app.state.probe_task = asyncio.create_task(probe_external_backends(app))
     try:
         yield
     finally:
+        app.state.probe_task.cancel()
+        await asyncio.gather(app.state.probe_task, return_exceptions=True)
         for task in list(app.state.shadow_tasks):
             task.cancel()
         if app.state.shadow_tasks:
@@ -212,18 +252,6 @@ def record(
     )
 
 
-async def open_upstream(
-    client: httpx.AsyncClient, candidate: Candidate, payload: dict, stream: bool
-) -> httpx.Response:
-    request = client.build_request(
-        "POST",
-        f"{candidate.backend}/v1/chat/completions",
-        json=payload,
-        headers={"Content-Type": "application/json"},
-    )
-    return await client.send(request, stream=stream)
-
-
 async def run_shadow(
     *,
     client: httpx.AsyncClient,
@@ -249,7 +277,9 @@ async def run_shadow(
     completion_tokens = 0
     started = time.perf_counter()
     try:
-        response = await open_upstream(client, candidate, payload, stream=False)
+        response = await open_upstream(
+            client, candidate, payload, stream=False, headers=access.headers(candidate)
+        )
         raw = await response.aread()
         await response.aclose()
         status = str(response.status_code)
@@ -329,6 +359,8 @@ def policy_view(policy: Policy) -> dict:
             "priority": candidate.priority,
             "max_context": candidate.max_context,
             "cost_per_1k_out": candidate.cost_per_1k_out,
+            "external": candidate.external,
+            "access_key": candidate.access.key if candidate.access else None,
         }
 
     aliases = {}
@@ -371,11 +403,21 @@ async def health() -> dict:
     snapshot = store.breakers.snapshot()
     open_count = sum(1 for item in snapshot.values() if item["state"] == breakers.OPEN)
     half_open = sum(1 for item in snapshot.values() if item["state"] == breakers.HALF_OPEN)
+    external = {
+        candidate.name
+        for alias in store.policy.aliases.values()
+        for candidate in alias.candidates.values()
+        if candidate.external
+    }
     return {
         "status": "ok",
         "aliases": len(store.policy.aliases),
         "policy_version": store.policy.version,
         "breakers": {"open": open_count, "half_open": half_open},
+        "external": {
+            "configured": sorted(external - set(access.unconfigured(store.policy))),
+            "unconfigured": access.unconfigured(store.policy),
+        },
     }
 
 
@@ -577,7 +619,11 @@ async def chat_completions(
             continue
         try:
             upstream = await open_upstream(
-                client, candidate, dict(body, model=candidate.upstream_model), stream
+                client,
+                candidate,
+                dict(body, model=candidate.upstream_model),
+                stream,
+                headers=access.headers(candidate),
             )
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
             store.breakers.record_failure(key)

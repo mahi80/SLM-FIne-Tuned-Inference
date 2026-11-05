@@ -67,6 +67,11 @@ POLICY_RELOADS = Counter(
     "Policy reload attempts",
     ["result"],
 )
+BACKEND_PROBE = Counter(
+    "gateway_backend_probe_total",
+    "Health probes of external backends, by outcome",
+    ["alias", "candidate", "result"],
+)
 
 
 def render() -> Response:

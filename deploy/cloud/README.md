@@ -50,12 +50,30 @@ route without a pool is a 503:
 4. `python tools/validate_deploy.py` — it fails if the candidate and the pool
    disagree about compute, deployment or backend.
 
-For a cloud provider's managed endpoint, step 2 is not enough yet: the gateway
-egress NetworkPolicy only permits in-cluster Pods, and there is no TLS or
-backend-credential model for an external host. That is Stage 3 in the expansion
-plan, tracked in the architecture notes. Until it lands, `cloud-burst` in
-`config/capacity.yaml` is `provider: simulated` and every response it serves is
-labelled `x-simulated`.
+For a cloud provider's managed endpoint the pool is *external*: it has no
+Deployment, Service or node pool in this cluster. Steps 1–4 still describe the
+provider's node pool, but the registry entry and the route look different:
+
+1. Record the pool with `external: true`, an `https` endpoint, and **no**
+   `workload` or `node_pool` — the validator rejects either.
+2. Give the candidate an `access` block that names a key, never the key itself:
+   `access: {key: external-prod}`.
+3. Create `Secret/slm-backend-keys` out of band in `slm-fabric` with
+   `keys: {external-prod: …}`. It is mounted optionally at
+   `/app/backend-keys`; a missing entry vetoes the candidate as
+   `backend-unconfigured` instead of failing a request.
+4. Add `components/cloud-egress` to the overlay and replace its TEST-NET-2
+   placeholder with the provider's published range, TCP 443 only. The
+   validator rejects a default, private, loopback or link-local CIDR, the
+   component without an external candidate, and an external candidate without
+   the component. The air-gap overlay forbids it.
+5. Mount a CA bundle and set `SLM_BACKEND_CA` only if the provider's chain is
+   not in the image's trust store. A configured bundle that is missing stops
+   the gateway rather than silently trusting public roots.
+
+Until you do this, `cloud-burst` in `config/capacity.yaml` is `provider:
+simulated` and every response it serves is labelled `x-simulated`. The rationale
+and limits are in [ADR-0009](../../docs/adr/ADR-0009-external-backends.md).
 
 ## Autoscaling interaction
 

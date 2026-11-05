@@ -25,11 +25,16 @@ What it protects, in order of how expensive the mistake is:
     gateway, whose quota, breaker and audit state is in-process.
   * the gateway is a single replica, because its quota, breaker and audit state
     is in-process.
+  * an external (cloud) candidate can only be routed to when the gateway mounts
+    its optional key Secret, points SLM_BACKEND_KEYS at it, and an opt-in egress
+    rule opens TCP 443 to a public provider range — never to the cluster or the
+    whole internet.
 """
 
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import re
 import subprocess
 import sys
@@ -373,6 +378,10 @@ def check_policy_binding(docs: list[dict], policy_path: Path) -> list[str]:
         }
     for alias, body in (policy.get("aliases") or {}).items():
         for candidate in body.get("candidates") or []:
+            if candidate.get("access") is not None:
+                # An external backend has no Service by design; admission and
+                # the egress policy are what gate it instead.
+                continue
             backend = candidate.get("backend", "")
             parsed = urlsplit(backend)
             host, port = parsed.hostname, parsed.port
@@ -484,6 +493,21 @@ SCALER_KINDS = {"ScaledObject", "HorizontalPodAutoscaler"}
 COMPUTE_TYPES = {"gpu", "cpu"}
 DEPLOYMENT_TYPES = {"onprem", "cloud"}
 AUTOSCALERS = {"external", "none"}
+BACKEND_KEYS_SECRET = "slm-backend-keys"
+CLOUD_EGRESS_POLICY = "allow-gateway-cloud-egress"
+PRIVATE_NETWORKS = tuple(
+    ipaddress.ip_network(cidr)
+    for cidr in (
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "127.0.0.0/8",
+        "169.254.0.0/16",
+        "fc00::/7",
+        "fe80::/10",
+        "::1/128",
+    )
+)
 
 
 def load_capacity(path: Path = CAPACITY_PATH) -> dict:
@@ -510,31 +534,50 @@ def load_capacity(path: Path = CAPACITY_PATH) -> dict:
         deployment = str(raw.get("deployment") or "")
         if deployment not in DEPLOYMENT_TYPES:
             raise RuntimeError(f"{where}: deployment must be one of {sorted(DEPLOYMENT_TYPES)}")
+        external = bool(raw.get("external", False))
         replicas = raw.get("replicas") or {}
-        try:
-            minimum, maximum = int(replicas["min"]), int(replicas["max"])
-        except (KeyError, TypeError, ValueError) as exc:
-            raise RuntimeError(f"{where} does not declare replicas.min and replicas.max") from exc
+        if external and not replicas:
+            minimum, maximum = 0, 0
+        else:
+            try:
+                minimum, maximum = int(replicas["min"]), int(replicas["max"])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise RuntimeError(f"{where} does not declare replicas.min and replicas.max") from exc
         if minimum < 0 or maximum < minimum:
             raise RuntimeError(f"{where}: replicas must satisfy 0 <= min <= max")
         endpoint = str(raw.get("endpoint") or "").rstrip("/")
         if not endpoint.startswith(("http://", "https://")):
             raise RuntimeError(f"{where}: endpoint must be an http(s) URL")
         workload = str(raw.get("workload") or "").strip()
-        if not workload:
-            raise RuntimeError(f"{where} has no workload")
         metrics = raw.get("metrics") or []
         if not isinstance(metrics, list):
             raise RuntimeError(f"{where}: metrics must be a list")
         node_pool = raw.get("node_pool") or {}
-        if not isinstance(node_pool, dict) or not str(node_pool.get("label") or "").strip():
-            raise RuntimeError(f"{where} has no node_pool.label")
-        if str(node_pool.get("autoscaler") or "") not in AUTOSCALERS:
-            raise RuntimeError(f"{where}: node_pool.autoscaler must be one of {sorted(AUTOSCALERS)}")
+        if external:
+            if not endpoint.startswith("https://"):
+                raise RuntimeError(f"{where}: an external pool endpoint must be https")
+            if workload:
+                raise RuntimeError(
+                    f"{where}: an external pool has no local Deployment; drop 'workload'"
+                )
+            if node_pool:
+                raise RuntimeError(
+                    f"{where}: an external pool's nodes belong to the provider; drop 'node_pool'"
+                )
+        else:
+            if not workload:
+                raise RuntimeError(f"{where} has no workload")
+            if not isinstance(node_pool, dict) or not str(node_pool.get("label") or "").strip():
+                raise RuntimeError(f"{where} has no node_pool.label")
+            if str(node_pool.get("autoscaler") or "") not in AUTOSCALERS:
+                raise RuntimeError(
+                    f"{where}: node_pool.autoscaler must be one of {sorted(AUTOSCALERS)}"
+                )
         pools[name] = {
             "name": name,
             "compute": compute,
             "deployment": deployment,
+            "external": external,
             "provider": str(raw.get("provider") or ""),
             "modelled": bool(raw.get("modelled", False)),
             "endpoint": endpoint,
@@ -585,6 +628,18 @@ def check_pools(capacity: dict, policy_path: Path) -> list[str]:
                 errors.append(
                     f"{where} points at {backend!r}, pool {name} endpoint is {pool['endpoint']!r}"
                 )
+            has_access = raw.get("access") is not None
+            if has_access != pool["external"]:
+                if pool["external"]:
+                    errors.append(
+                        f"{where} has no access block, but pool {name} is external; "
+                        "an external backend must reference a key from the mounted Secret"
+                    )
+                else:
+                    errors.append(
+                        f"{where} declares access, but pool {name} is in-cluster; "
+                        "mark the pool external before sending credentials"
+                    )
     return errors
 
 
@@ -795,6 +850,8 @@ def check_overlay(overlay: str, docs: list[dict]) -> list[str]:
             for doc in docs
         ):
             errors.append("airgap overlay still allows vLLM to reach the internet")
+        if find(docs, "NetworkPolicy", CLOUD_EGRESS_POLICY) is not None:
+            errors.append("airgap overlay must not open egress to a cloud provider")
         if vllm is None:
             errors.append("airgap overlay has no Deployment/vllm-gpu")
         else:
@@ -812,6 +869,146 @@ def check_overlay(overlay: str, docs: list[dict]) -> list[str]:
     return errors
 
 
+def external_candidates(policy_path: Path) -> list[tuple[str, str]]:
+    policy = yaml.safe_load(Path(policy_path).read_text(encoding="utf-8")) or {}
+    found: list[tuple[str, str]] = []
+    for alias, body in (policy.get("aliases") or {}).items():
+        for candidate in (body or {}).get("candidates") or []:
+            if isinstance(candidate, dict) and candidate.get("access") is not None:
+                found.append((str(alias), str(candidate.get("name"))))
+    return found
+
+
+def check_cloud_egress(network_policy: dict) -> list[str]:
+    """Egress to a cloud provider is the one rule that can undo default-deny.
+
+    A rule that names no peer, or a CIDR that covers the cluster or the whole
+    internet, turns the gateway into an arbitrary outbound proxy. Only the
+    provider's public range on 443 may be opened.
+    """
+    name = f"NetworkPolicy/{CLOUD_EGRESS_POLICY}"
+    errors: list[str] = []
+    spec = network_policy.get("spec") or {}
+    selector = (spec.get("podSelector") or {}).get("matchLabels") or {}
+    if selector.get(VLLM_LABEL) != "gateway":
+        errors.append(f"{name} does not select the gateway pods")
+    if "Egress" not in (spec.get("policyTypes") or []):
+        errors.append(f"{name} does not declare the Egress policy type")
+    rules = spec.get("egress") or []
+    if not rules:
+        errors.append(f"{name} has no egress rule")
+    for index, rule in enumerate(rules):
+        where = f"{name} egress[{index}]"
+        peers = rule.get("to") or []
+        if not peers:
+            errors.append(f"{where}: allows every peer")
+        for peer in peers:
+            block = peer.get("ipBlock")
+            if block is None:
+                errors.append(
+                    f"{where}: peer is not an ipBlock; in-cluster backends are already allowed"
+                )
+                continue
+            cidr = str(block.get("cidr") or "")
+            try:
+                network = ipaddress.ip_network(cidr, strict=False)
+            except ValueError:
+                errors.append(f"{where}: {cidr!r} is not a CIDR")
+                continue
+            if network.prefixlen == 0:
+                errors.append(f"{where}: {cidr} allows the whole internet")
+            elif any(network.overlaps(private) for private in PRIVATE_NETWORKS):
+                errors.append(
+                    f"{where}: {cidr} overlaps private, loopback or link-local space; "
+                    "an external backend must be reached at a public address"
+                )
+        ports = rule.get("ports") or []
+        if not ports:
+            errors.append(f"{where}: opens every port")
+        for port in ports:
+            if str(port.get("protocol") or "TCP") != "TCP" or port.get("port") != 443:
+                errors.append(f"{where}: only TCP 443 may leave the cluster")
+    return errors
+
+
+def check_external_backends(docs: list[dict], policy_path: Path) -> list[str]:
+    """An external candidate is inert until three things line up: a key the
+    gateway can read, a CA it can trust, and an egress rule that names the
+    provider. Each missing piece fails closed at runtime, so catch it here."""
+    errors: list[str] = []
+    candidates = external_candidates(policy_path)
+    gateway = find(docs, "Deployment", "gateway")
+    if gateway is None:
+        return ["missing Deployment/gateway"]
+    spec = pod_spec(gateway)
+    containers_ = spec.get("containers") or []
+    env = _env(containers_[0]) if containers_ else {}
+    keys_volume = next(
+        (
+            volume
+            for volume in spec.get("volumes") or []
+            if (volume.get("secret") or {}).get("secretName") == BACKEND_KEYS_SECRET
+        ),
+        None,
+    )
+    keys_mount = next(
+        (
+            mount
+            for container in containers_
+            for mount in container.get("volumeMounts") or []
+            if keys_volume is not None and mount.get("name") == keys_volume.get("name")
+        ),
+        None,
+    )
+    egress = find(docs, "NetworkPolicy", CLOUD_EGRESS_POLICY)
+
+    if not candidates:
+        if egress is not None:
+            errors.append(
+                f"{label(egress)} opens egress but no policy candidate is external"
+            )
+        return errors
+
+    if keys_mount is None:
+        errors.append(
+            f"Deployment/gateway does not mount Secret/{BACKEND_KEYS_SECRET}; "
+            "external candidates would be vetoed as backend-unconfigured"
+        )
+    else:
+        if (keys_volume.get("secret") or {}).get("optional") is not True:
+            errors.append(
+                f"Secret/{BACKEND_KEYS_SECRET} mount is not optional; an in-cluster-only "
+                "install would fail to start"
+            )
+        keys_env = str(env.get("SLM_BACKEND_KEYS") or "")
+        expected = str(keys_mount.get("mountPath", "")).rstrip("/") + "/keys.yaml"
+        if keys_env != expected:
+            errors.append(
+                f"Deployment/gateway SLM_BACKEND_KEYS is {keys_env!r}, "
+                f"expected {expected!r} from the {BACKEND_KEYS_SECRET} mount"
+            )
+    ca_env = str(env.get("SLM_BACKEND_CA") or "")
+    if ca_env:
+        mounts = [
+            str(mount.get("mountPath", "")).rstrip("/")
+            for container in containers_
+            for mount in container.get("volumeMounts") or []
+        ]
+        if not any(ca_env.startswith(f"{path}/") for path in mounts):
+            errors.append(
+                f"Deployment/gateway SLM_BACKEND_CA is {ca_env!r}, which is not inside a mounted volume"
+            )
+    if egress is None:
+        errors.append(
+            f"policy has external candidates {sorted({name for _, name in candidates})} "
+            f"but the rendered set has no NetworkPolicy/{CLOUD_EGRESS_POLICY}; the "
+            "default-deny would blackhole them"
+        )
+    else:
+        errors.extend(check_cloud_egress(egress))
+    return errors
+
+
 def validate(docs: list[dict], overlay: str, policy_path: Path, capacity: dict | None = None) -> list[str]:
     capacity = capacity if capacity is not None else load_capacity()
     return [
@@ -826,6 +1023,7 @@ def validate(docs: list[dict], overlay: str, policy_path: Path, capacity: dict |
         *check_pools(capacity, policy_path),
         *check_policy_binding(docs, policy_path),
         *check_gateway_state(docs),
+        *check_external_backends(docs, policy_path),
         *check_no_secrets(docs),
         *check_namespaces(docs),
         *check_autoscaling(docs, capacity),

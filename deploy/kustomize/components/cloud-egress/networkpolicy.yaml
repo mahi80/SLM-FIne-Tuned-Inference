@@ -1,0 +1,37 @@
+# Egress for an external (cloud) backend.
+#
+# Base denies all egress and allows only in-cluster backends, so a policy
+# candidate pointing at https://... is blackholed until this component is
+# enabled. Enabling it opens exactly one destination: the provider range below
+# on TCP 443. Everything else stays denied.
+#
+#   components:
+#     - ../../components/cloud-egress
+#
+# The placeholder is TEST-NET-2 (198.51.100.0/24), which is reserved for
+# documentation and routes nowhere. Replace it with the provider's published
+# egress range — the validator rejects 0.0.0.0/0, private ranges and any port
+# other than 443. A provider that only exposes a DNS name, or a private
+# endpoint inside the VPC, needs a different mechanism: NetworkPolicy cannot
+# express hostnames, and private endpoints are reached as in-cluster/peered
+# addresses rather than through this rule.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-gateway-cloud-egress
+  labels:
+    app.kubernetes.io/part-of: slm-fabric
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: gateway
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 198.51.100.0/24
+      ports:
+        - protocol: TCP
+          port: 443

@@ -93,9 +93,15 @@ def breaker_keys(policy: Policy) -> set[str]:
 
 
 class PolicyEngine:
-    def __init__(self, policy: Policy, circuit_breakers: breakers.CircuitBreakers) -> None:
+    def __init__(
+        self,
+        policy: Policy,
+        circuit_breakers: breakers.CircuitBreakers,
+        backend_ready: Callable[[Candidate], bool] | None = None,
+    ) -> None:
         self.policy = policy
         self.breakers = circuit_breakers
+        self._backend_ready = backend_ready
 
     def _admit(
         self, alias: str, candidate: Candidate, tenant: TenantView, required_tokens: int
@@ -108,6 +114,9 @@ class PolicyEngine:
             return False, "deployment-denied"
         if candidate.deployment == "cloud" and not tenant.allow_cloud:
             return False, "cloud-denied"
+        if candidate.external and self._backend_ready is not None:
+            if not self._backend_ready(candidate):
+                return False, "backend-unconfigured"
         if "*" not in candidate.serves_regions and tenant.region not in candidate.serves_regions:
             return False, "region-veto"
         if tenant.data_class in SOVEREIGN_CLASSES and not candidate.sovereign:
@@ -233,13 +242,17 @@ class PolicyStore:
     """
 
     def __init__(
-        self, path: str | Path, clock: Callable[[], float] = time.monotonic
+        self,
+        path: str | Path,
+        clock: Callable[[], float] = time.monotonic,
+        backend_ready: Callable[[Candidate], bool] | None = None,
     ) -> None:
         self.path = Path(path)
+        self._backend_ready = backend_ready
         policy = load_policy(str(self.path))
         self._policy = policy
         self._breakers = breakers.CircuitBreakers(policy.breaker, clock)
-        self._engine = PolicyEngine(policy, self._breakers)
+        self._engine = PolicyEngine(policy, self._breakers, backend_ready)
 
     @property
     def policy(self) -> Policy:
@@ -257,6 +270,6 @@ class PolicyStore:
         policy = load_policy(str(self.path))
         self._breakers.reconfigure(policy.breaker)
         self._breakers.prune(breaker_keys(policy))
-        self._engine = PolicyEngine(policy, self._breakers)
+        self._engine = PolicyEngine(policy, self._breakers, self._backend_ready)
         self._policy = policy
         return policy

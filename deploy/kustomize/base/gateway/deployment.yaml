@@ -44,6 +44,13 @@ spec:
               value: /app/secrets/tenants.yaml
             - name: AUDIT_FILE
               value: /var/lib/slm/audit.jsonl
+            # External backends read their bearer keys from this file. The
+            # Secret is optional: an in-cluster-only install has no cloud keys,
+            # and the gateway vetoes external candidates as unconfigured.
+            - name: SLM_BACKEND_KEYS
+              value: /app/backend-keys/keys.yaml
+            - name: SLM_PROBE_INTERVAL_S
+              value: "30"
             - name: PYTHONDONTWRITEBYTECODE
               value: "1"
           ports:
@@ -88,6 +95,11 @@ spec:
             - name: tenants
               mountPath: /app/secrets
               readOnly: true
+            # Not in Git. Created out of band by whoever owns the cloud
+            # account; optional so an on-prem-only install starts without it.
+            - name: backend-keys
+              mountPath: /app/backend-keys
+              readOnly: true
             - name: audit
               mountPath: /var/lib/slm
             - name: tmp
@@ -100,6 +112,10 @@ spec:
           secret:
             secretName: slm-tenants
             optional: false
+        - name: backend-keys
+          secret:
+            secretName: slm-backend-keys
+            optional: true
         - name: audit
           persistentVolumeClaim:
             claimName: slm-gateway-audit

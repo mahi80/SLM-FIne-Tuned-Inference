@@ -18,6 +18,8 @@ document names what crosses them and what would happen if it did.
 | Adapter weights | The fine-tuned behaviour; a swapped adapter is a silent product change | `adapters/triage-*` → adapter PVC |
 | Signed release manifest | The authoritative statement of what is deployed | `release/*.json` + `.sig` |
 | Signing key | Authority to publish a release | Local file today; HSM/KMS in production |
+| External backend keys | Authenticate the gateway to a cloud inference provider; spend bearer authority | `Secret/slm-backend-keys`, mounted at `/app/backend-keys`; never in Git or the policy |
+| Backend CA bundle (optional) | What the gateway trusts when it calls an external backend | `ConfigMap/slm-backend-ca` → `SLM_BACKEND_CA`; absent means the system trust store |
 
 ## Actors
 
@@ -40,6 +42,9 @@ document names what crosses them and what would happen if it did.
 4. `/metrics` and `/health` — unauthenticated by design; network-scoped.
 5. Argo CD sync and the PostSync jobs — cluster-internal.
 6. Image and model pulls at first start — network egress, connected overlay only.
+7. `POST https://<external-backend>/v1/chat/completions` — only when a policy candidate is
+   `external` and the `cloud-egress` component is applied; egress is otherwise denied and the
+   candidate fails admission as `backend-unconfigured`.
 
 ## STRIDE analysis
 
@@ -53,6 +58,11 @@ document names what crosses them and what would happen if it did.
 | **T**ampering | Swap adapter weights after signing | Adapter PVC | Manifest pins the adapter tree digest; `make release-check` re-hashes local artifacts | No runtime digest check at load time, and artifacts are outside the cluster's provenance — [R-13](risks.md#r-13--adapter-artifacts-are-not-committed) |
 | **R**epudiation | Deny that a request was served by a model version | Dispute | Audit record carries tenant, alias, candidate, model version, policy version, bucket, vetoes, latency, tokens | Chain can be rewritten by a privileged writer; no external notarisation — R-01 |
 | **I**nformation disclosure | Confidential data routed to cloud | Gateway → cloud | Admission: `allow_cloud`, `serves_regions`, sovereignty veto for `confidential`/`restricted`; vetoes audited | A misconfigured policy can permit it — R-07 |
+| **I**nformation disclosure | An external backend key leaks through a manifest, log or audit record | Policy → Secret → gateway | The policy carries only a key *name*; the value lives in `Secret/slm-backend-keys` created out of band; audit records name the key, never the value; readiness and `/health` report names only | The Secret is readable to anyone who can read the namespace, and rotation requires a restart — R-18, R-04 |
+| **S**poofing | An external endpoint is impersonated or intercepted | Gateway → cloud | External candidates must be `https`, with no userinfo, query or fragment; verification uses the system trust store or an operator-pinned CA, and a missing configured bundle fails startup rather than falling back to plaintext | A compromised or over-broad operator CA bundle would allow interception — R-18 |
+| **S**poofing | Another in-namespace workload calls the provider as if it were the gateway | In-namespace → cloud | The egress rule selects only gateway pods, so no other pod in the namespace can reach the external host; backend keys are mounted only into the gateway | A pod that can read the Secret can still use the key if it gains egress by another route — R-18 |
+| **I**nformation disclosure | The opt-in egress rule is widened to the internet or to private ranges | `cloud-egress` → validator | The validator rejects `0.0.0.0/0`, private, loopback and link-local ranges, non-443 ports, pod-selector peers and an empty rule set; the airgap overlay forbids the policy outright | A provider CIDR that overlaps a shared proxy or CDN widens the path; the validator cannot know the provider's topology |
+| **D**enial of service | An external backend is down, slow or misconfigured | Gateway → cloud | The probe loop feeds the same per-`alias:candidate` breakers as traffic; 5xx and transport failures open the breaker, 4xx counts as reachable; an unconfigured key vetoes the candidate before scoring | The probe is interval-bound and best-effort; in-flight requests still wait out the timeout — R-18 |
 | **I**nformation disclosure | Prompt secrets forwarded to a tier | B3/B4 | Audited routing decision; no DLP | Content is not inspected — [R-06](risks.md#r-06--prompt-content-is-not-inspected) |
 | **I**nformation disclosure | Cross-tenant data in adapters or cache | GPU | Single-tenant platform deployment; adapters are global, not per tenant | Multi-tenant shared adapter use would need per-tenant adapter isolation; out of scope today |
 | **I**nformation disclosure | Audit log leaks prompt content | Audit volume | Records contain metadata and token counts only, never message text | Deliberate: limits forensic content review |
@@ -96,6 +106,15 @@ Requires a malicious image (pinned by digest and admission; provenance remains R
 supply-chain compromise (R-03), or an exploit in vLLM's HTTP surface — which is the largest
 unscanned attack surface in the design and the reason C-09 exists.
 
+**Goal: send tenant prompts to a host the platform does not control.**
+Requires (a) an `external` candidate in `config/policy.yaml`, which is a reviewed and signed
+artifact, (b) an egress CIDR in the `cloud-egress` component that covers the attacker's
+address, and (c) the key name in that candidate resolving in `Secret/slm-backend-keys`, so the
+victim host answers with valid output rather than an auth error. All three are Git changes;
+the validator refuses an ambiguous or private CIDR, and an external candidate without the
+component (or the component without a candidate) fails CI. The remaining path is a reviewer
+approving a wrong hostname, which is the same class of failure as R-07.
+
 ## Out of scope
 
 - Kubernetes control-plane compromise, etcd access, or node-level root.
@@ -106,7 +125,8 @@ unscanned attack surface in the design and the reason C-09 exists.
 
 ## Review triggers
 
-Re-run this threat model when: a second runtime or gateway replica is added, cloud egress is
-enabled for a new data class, adapter weights move to a registry, OIDC replaces static keys,
-or the audit head is shipped externally. Each of those changes moves a boundary, not just a
-configuration value.
+Re-run this threat model when: a second runtime or gateway replica is added, an external
+backend is first pointed at a real provider (Stage 2 shipped the path, not a provider — R-18),
+a new data class is allowed to leave the cluster, adapter weights move to a registry, OIDC
+replaces static keys, or the audit head is shipped externally. Each of those changes moves a
+boundary, not just a configuration value.

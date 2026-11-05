@@ -7,6 +7,12 @@
 # tier is a calibrated simulator. `provider: simulated` marks the same thing
 # for a route that is meant to become a cloud endpoint.
 #
+# `external: true` marks a pool whose backend is reached over the internet. Such
+# a pool must use an https endpoint, has no local workload or node_pool, and its
+# candidates must carry an `access` block naming a key from the mounted
+# Secret/slm-backend-keys. The pool also needs the opt-in cloud-egress component
+# (deploy/kustomize/components/cloud-egress) in the overlay.
+#
 # Node-pool manifests for AWS, Azure, GCP and on-prem GPU workers live under
 # deploy/cloud/; each one applies the label and taint recorded per pool.
 version: 2
@@ -15,6 +21,7 @@ pools:
   - name: onprem-gpu
     compute: gpu
     deployment: onprem
+    external: false
     provider: onprem
     modelled: false
     endpoint: http://vllm-gpu:8000
@@ -69,6 +76,7 @@ pools:
   - name: onprem-cpu
     compute: cpu
     deployment: onprem
+    external: false
     provider: onprem
     # Calibrated Xeon-class simulator; the pool contract is the real CPU tier.
     modelled: true
@@ -91,6 +99,7 @@ pools:
   - name: cloud-burst
     compute: gpu
     deployment: cloud
+    external: false
     # A route with no real provider behind it yet. deploy/cloud/ holds the
     # node-pool manifests that make it real; until then the simulator answers
     # and labels every response x-simulated.
@@ -99,8 +108,11 @@ pools:
     endpoint: http://tiersim-cloud:8001
     workload: tiersim-cloud
 
-    # Stage 3 (external backend, TLS, credentials, egress) moves this to a
-    # managed endpoint with min 0; the simulator is one pinned replica.
+    # The external-backend path is implemented (Stage 2) but this pool stays a
+    # simulator: the route is in-cluster, unauthenticated and not TLS. Pointing
+    # it at a provider means a new pool with external: true, an https endpoint,
+    # access in the policy, and the cloud-egress component — then this route is
+    # deleted, not edited.
     replicas:
       min: 1
       max: 1

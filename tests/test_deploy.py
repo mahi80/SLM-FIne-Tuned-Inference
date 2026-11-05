@@ -574,6 +574,241 @@ class CloudPoolSnippets(unittest.TestCase):
                     self.assertIn(f"{cpu_pool['taint']}=cpu", text)
 
 
+class ExternalBackendChecks(unittest.TestCase):
+    """An external route fails closed unless key, CA and egress all line up."""
+
+    EXTERNAL_POLICY = (
+        "aliases:\n"
+        "  burst:\n"
+        "    candidates:\n"
+        "      - name: cloud\n"
+        "        compute: gpu\n"
+        "        deployment: cloud\n"
+        "        pool: cloud-prod\n"
+        "        backend: https://inference.example.com\n"
+        "        upstream_model: model-cloud\n"
+        "        access:\n"
+        "          key: external-prod\n"
+    )
+
+    @staticmethod
+    def policy_file(tmp: str, text: str) -> Path:
+        path = Path(tmp) / "policy.yaml"
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    @staticmethod
+    def capacity(*pools) -> dict:
+        return {"version": 2, "pools": {pool["name"]: pool for pool in pools}}
+
+    @staticmethod
+    def external_pool(**overrides) -> dict:
+        pool = {
+            "name": "cloud-prod",
+            "compute": "gpu",
+            "deployment": "cloud",
+            "external": True,
+            "provider": "aws",
+            "modelled": False,
+            "endpoint": "https://inference.example.com",
+            "workload": "",
+            "min_replicas": 0,
+            "max_replicas": 0,
+            "metrics": [],
+            "prerequisites": {},
+            "node_pool": {},
+        }
+        pool.update(overrides)
+        return pool
+
+    def gateway(self, *, optional=True, env=None, mount=True) -> dict:
+        doc = deployment(name="gateway")
+        spec = doc["spec"]["template"]["spec"]
+        spec["volumes"] = [
+            {"name": "policy", "configMap": {"name": "slm-policy-abc"}},
+            {"name": "tenants", "secret": {"secretName": "slm-tenants"}},
+            {
+                "name": "backend-keys",
+                "secret": {"secretName": "slm-backend-keys", "optional": optional},
+            },
+        ]
+        container = spec["containers"][0]
+        if mount:
+            container["volumeMounts"] = [
+                {"name": "backend-keys", "mountPath": "/app/backend-keys", "readOnly": True}
+            ]
+        container["env"] = env if env is not None else [
+            {"name": "SLM_BACKEND_KEYS", "value": "/app/backend-keys/keys.yaml"}
+        ]
+        return doc
+
+    @staticmethod
+    def cloud_egress(**overrides) -> dict:
+        rule = {
+            "to": [{"ipBlock": {"cidr": "198.51.100.0/24"}}],
+            "ports": [{"protocol": "TCP", "port": 443}],
+        }
+        rule.update(overrides)
+        return {
+            "apiVersion": "networking.k8s.io/v1",
+            "kind": "NetworkPolicy",
+            "metadata": {"name": "allow-gateway-cloud-egress", "namespace": "slm-fabric"},
+            "spec": {
+                "podSelector": {"matchLabels": {"app.kubernetes.io/name": "gateway"}},
+                "policyTypes": ["Egress"],
+                "egress": [rule],
+            },
+        }
+
+    def check(self, docs, policy_text=None):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.policy_file(tmp, policy_text or self.EXTERNAL_POLICY)
+            return vd.check_external_backends(docs, path)
+
+    def test_shipped_overlays_need_no_external_wiring(self):
+        docs = [deployment(name="gateway")]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.policy_file(tmp, "aliases:\n  a:\n    candidates:\n      - backend: http://vllm-gpu:8000\n")
+            self.assertEqual(vd.check_external_backends(docs, path), [])
+
+    def test_external_candidate_needs_a_keys_mount(self):
+        errors = self.check([self.gateway(mount=False), self.cloud_egress()])
+        self.assertTrue(any("SLM_BACKEND_KEYS" in error or "mount" in error for error in errors))
+
+    def test_keys_secret_must_be_optional(self):
+        errors = self.check([self.gateway(optional=False), self.cloud_egress()])
+        self.assertTrue(any("not optional" in error for error in errors))
+
+    def test_external_candidate_needs_an_egress_rule(self):
+        errors = self.check([self.gateway()])
+        self.assertTrue(any("allow-gateway-cloud-egress" in error for error in errors))
+
+    def test_complete_external_wiring_passes(self):
+        self.assertEqual(self.check([self.gateway(), self.cloud_egress()]), [])
+
+    def test_egress_rule_without_a_consumer_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.policy_file(
+                tmp, "aliases:\n  a:\n    candidates:\n      - backend: http://vllm-gpu:8000\n"
+            )
+            docs = [deployment(name="gateway"), self.cloud_egress()]
+            errors = vd.check_external_backends(docs, path)
+        self.assertTrue(any("no policy candidate is external" in error for error in errors))
+
+    def test_egress_cannot_open_the_whole_internet(self):
+        policy = self.cloud_egress(to=[{"ipBlock": {"cidr": "0.0.0.0/0"}}])
+        errors = vd.check_cloud_egress(policy)
+        self.assertTrue(any("whole internet" in error for error in errors))
+
+    def test_egress_cannot_reach_private_space(self):
+        for cidr in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16"):
+            with self.subTest(cidr=cidr):
+                errors = vd.check_cloud_egress(
+                    self.cloud_egress(to=[{"ipBlock": {"cidr": cidr}}])
+                )
+                self.assertTrue(any("private" in error for error in errors))
+
+    def test_egress_to_a_pod_is_not_a_cloud_route(self):
+        errors = vd.check_cloud_egress(
+            self.cloud_egress(to=[{"podSelector": {"matchLabels": {"a": "b"}}}])
+        )
+        self.assertTrue(any("not an ipBlock" in error for error in errors))
+
+    def test_egress_cannot_open_another_port(self):
+        errors = vd.check_cloud_egress(
+            self.cloud_egress(ports=[{"protocol": "TCP", "port": 80}])
+        )
+        self.assertTrue(any("only TCP 443" in error for error in errors))
+
+    def test_egress_must_target_the_gateway(self):
+        policy = self.cloud_egress()
+        policy["spec"]["podSelector"]["matchLabels"] = {"app.kubernetes.io/name": "other"}
+        self.assertTrue(vd.check_cloud_egress(policy))
+
+    def test_shipped_component_is_valid(self):
+        path = REPO / "deploy/kustomize/components/cloud-egress/networkpolicy.yaml"
+        docs = vd.load_documents(path.read_text(encoding="utf-8"))
+        self.assertEqual(len(docs), 1)
+        self.assertEqual(vd.check_cloud_egress(docs[0]), [])
+
+    def test_airgap_overlay_cannot_open_cloud_egress(self):
+        errors = vd.check_overlay("airgap", [self.cloud_egress()])
+        self.assertTrue(any("cloud provider" in error for error in errors))
+
+    def test_candidate_access_and_pool_external_must_agree(self):
+        credentialed_internal = (
+            "aliases:\n"
+            "  burst:\n"
+            "    candidates:\n"
+            "      - name: cloud\n"
+            "        compute: gpu\n"
+            "        deployment: cloud\n"
+            "        pool: cloud-burst\n"
+            "        backend: http://tiersim-cloud:8001\n"
+            "        access: {key: external-prod}\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.policy_file(tmp, credentialed_internal)
+            errors = vd.check_pools(vd.load_capacity(), path)
+            self.assertTrue(any("is in-cluster" in error for error in errors))
+
+            capacity = self.capacity(self.external_pool())
+            no_access = self.EXTERNAL_POLICY.replace(
+                "        access:\n          key: external-prod\n", ""
+            )
+            path = self.policy_file(tmp, no_access)
+            errors = vd.check_pools(capacity, path)
+            self.assertTrue(any("no access block" in error for error in errors))
+
+            path = self.policy_file(tmp, self.EXTERNAL_POLICY)
+            self.assertEqual(vd.check_pools(capacity, path), [])
+
+    def test_registry_rejects_an_insecure_external_pool(self):
+        for overrides in (
+            {"endpoint": "http://inference.example.com"},
+            {"workload": "remote-gpu"},
+            {"node_pool": {"label": "nvidia.com/gpu.present"}},
+        ):
+            with self.subTest(overrides=overrides):
+                pool = {
+                    "name": "cloud-prod",
+                    "compute": "gpu",
+                    "deployment": "cloud",
+                    "external": True,
+                    "provider": "aws",
+                    "endpoint": "https://inference.example.com",
+                    "workload": "",
+                    "node_pool": {},
+                }
+                pool.update(overrides)
+                with tempfile.TemporaryDirectory() as tmp:
+                    path = Path(tmp) / "capacity.yaml"
+                    path.write_text(
+                        yaml.safe_dump({"version": 2, "pools": [pool]}), encoding="utf-8"
+                    )
+                    with self.assertRaises(RuntimeError):
+                        vd.load_capacity(path)
+
+    def test_external_candidate_needs_no_service(self):
+        policy_text = (
+            "aliases:\n"
+            "  burst:\n"
+            "    candidates:\n"
+            "      - name: cloud\n"
+            "        backend: https://inference.example.com\n"
+            "        access: {key: external-prod}\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.policy_file(tmp, policy_text)
+            configmap = {
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": {"name": "slm-policy-abc", "namespace": "slm-fabric"},
+                "data": {"policy.yaml": policy_text},
+            }
+            self.assertEqual(vd.check_policy_binding([configmap], path), [])
+
+
 class WiringChecks(unittest.TestCase):
     def test_policy_backends_must_have_services(self):
         policy_text = (
@@ -677,6 +912,28 @@ class RenderedOverlays(unittest.TestCase):
         self.assertNotIn("PrometheusRule", kinds)
         self.assertNotIn("ServiceMonitor", kinds)
         self.assertNotIn("ScaledObject", kinds)
+
+    def test_gateway_ships_optional_backend_key_plumbing(self):
+        docs = vd.render_overlay("vanilla")
+        gateway = next(
+            doc
+            for doc in docs
+            if doc.get("kind") == "Deployment" and doc["metadata"]["name"] == "gateway"
+        )
+        spec = vd.pod_spec(gateway)
+        volume = next(
+            volume
+            for volume in spec["volumes"]
+            if (volume.get("secret") or {}).get("secretName") == vd.BACKEND_KEYS_SECRET
+        )
+        self.assertTrue(volume["secret"]["optional"])
+        env = vd._env(spec["containers"][0])
+        self.assertEqual(env["SLM_BACKEND_KEYS"], "/app/backend-keys/keys.yaml")
+        mounts = {
+            mount["name"]: mount["mountPath"]
+            for mount in spec["containers"][0]["volumeMounts"]
+        }
+        self.assertEqual(mounts["backend-keys"], "/app/backend-keys")
 
     def test_gpu_scaler_ships_with_operator_overlays(self):
         capacity = vd.load_capacity()

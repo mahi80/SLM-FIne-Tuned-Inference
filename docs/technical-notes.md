@@ -36,6 +36,7 @@ the distinction explicit:
 | Observability (Prometheus + provisioned Grafana) | **Measured** | dashboard `slm-platform`, 7 panels |
 | CPU tier (OpenVINO / llama.cpp on Xeon/EPYC) | **Modelled** — calibrated simulator, no Xeon on this laptop | `src/tiersim`, labelled `x-simulated: true` |
 | Cloud burst tier (L4 profile) | **Modelled and wired** — a standby that residency usually excludes | `tiersim-cloud`, `x-simulated: true` |
+| External backend path (TLS, keyed by reference, egress rule, health probes) | **Implemented and unit tested** — no live provider was called | `src/gateway/backends.py`, `tests/test_backends.py`, [A-26](signoff/acceptance.md) |
 | OpenShift / vanilla / air-gap deployment | **Vanilla verified on kind; OpenShift and air gap static** — 25 objects applied, gateway and both simulators running | `deploy/kustomize`, `make deploy-validate`, [A-17](signoff/acceptance.md) |
 | GitOps, release hooks and admission policy | **Admission and Argo verified on kind; hooks unrun** — Kyverno v1.19.2 denials and Argo v3.6.1 self-heal observed | `deploy/gitops`, `deploy/policies`, [A-20](signoff/acceptance.md), [A-21](signoff/acceptance.md) |
 | Signed release manifest (Ed25519, canonical JSON, drift checks) | **Measured** | `make release`, `make release-check`, `release/slm-0.5.0.json` |
@@ -106,7 +107,8 @@ OK   airgap: 34 objects
 The validator is the review artifact. It re-renders the overlays and checks:
 
 - every candidate URL in `config/policy.yaml` resolves to a Service and port in the
-  rendered set, and the policy ConfigMap is identical to the file on disk;
+  rendered set (external candidates are exempt: they have no Service), and the policy
+  ConfigMap is identical to the file on disk;
 - the vLLM image and model revision are the Phase 0 pins, and multi-LoRA is enabled;
 - restricted security contexts, resource requests/limits and readiness probes on every
   workload, with vLLM the single documented exception to a read-only root filesystem;
@@ -119,7 +121,12 @@ The validator is the review artifact. It re-renders the overlays and checks:
   deployment and backend agree with that pool;
 - the GPU scaler agrees with `config/capacity.yaml`, keeps a warm floor of at least one
   replica, shares the model and adapter claims `ReadWriteMany`, preloads every adapter the
-  loader hook declares, and is never pointed at the gateway.
+  loader hook declares, and is never pointed at the gateway;
+- an external candidate and its pool opt in together: the gateway mounts the optional
+  `slm-backend-keys` Secret, `SLM_BACKEND_KEYS` points inside that mount, and an egress rule
+  opens TCP 443 to a public provider range only — never a default, private, loopback or
+  link-local CIDR. The component without a candidate, and a candidate without the
+  component, both fail.
 
 **Two node pools.** The GPU tier is hard-pinned: it selects `nvidia.com/gpu.present=true`
 and tolerates the `nvidia.com/gpu:NoSchedule` taint the GPU Operator applies. The gateway
@@ -246,12 +253,53 @@ same `nvidia.com/gpu.present` label, `nvidia.com/gpu` taint and `slm.fabric/pool
 contract the manifests already select, and the tests parse them so a typo cannot drift.
 
 Capability is not the same as a working route. The snippets buy machines; they do not make a
-cloud endpoint reachable. The gateway egress policy still allows only in-cluster Pods, and
-there is no TLS or backend-credential model for an external host. Until that exists,
-`cloud-burst` stays `provider: simulated` and every response it serves is labelled
-`x-simulated`. The validator enforces the three-way agreement (pool exists, compute and
-deployment match, backend equals the pool endpoint) so the registry cannot quietly describe
-capacity the router would never reach.
+cloud endpoint reachable. Stage 2 added the missing half — an external backend type with
+TLS, credentials by reference, an opt-in egress rule and health probes feeding the breakers
+— but no candidate in the shipped policy uses it, so `cloud-burst` stays
+`provider: simulated` and every response it serves is labelled `x-simulated`. The validator
+enforces the three-way agreement (pool exists, compute and deployment match, backend equals
+the pool endpoint) so the registry cannot quietly describe capacity the router would never
+reach.
+
+**External backends.** A candidate that leaves the cluster declares *which* key to use, not
+the key:
+
+```yaml
+- name: cloud-prod
+  compute: gpu
+  deployment: cloud
+  pool: cloud-prod
+  backend: https://inference.provider.example
+  upstream_model: model-name
+  access:
+    key: external-prod          # an entry in Secret/slm-backend-keys
+    header: authorization       # default; must be a token, never a header injection
+    prefix: "Bearer "           # default
+```
+
+The matching pool sets `external: true` with an `https` endpoint and no local workload or
+node pool. Three things then have to line up, and the validator fails the render if any is
+missing:
+
+1. `Secret/slm-backend-keys` holds `keys: {external-prod: …}` and is mounted *optionally* at
+   `/app/backend-keys`; the value never enters Git, the policy ConfigMap, an audit record or
+   a log line. Errors name the key, not the secret.
+2. `components/cloud-egress` opens `allow-gateway-cloud-egress`: gateway pods only, an
+   `ipBlock` for the provider's public range, TCP 443. Replace the TEST-NET-2 placeholder
+   with the provider's published range. The air-gap overlay rejects the component outright.
+3. The gateway verifies TLS against the system trust store, or `SLM_BACKEND_CA` when the
+   provider's chain is private. A configured-but-missing bundle stops the process instead
+   of silently trusting public roots.
+
+At runtime an external candidate whose key is absent is *considered and vetoed* with
+`backend-unconfigured` — the audit record says so, and the rest of the policy keeps serving.
+Every `SLM_PROBE_INTERVAL_S` (30 s) the gateway probes `GET /health` on each configured
+external candidate and records the result in that alias/candidate's breaker; a 4xx counts as
+reachable (host and certificate answered), a 5xx or transport error counts as down. A dead
+provider opens its breaker before a tenant request discovers it. All of this is proven by
+unit tests, including a throwaway HTTPS server with a self-signed certificate; no live
+provider was called (N-12, R-18). The rationale is in
+[ADR-0009](adr/ADR-0009-external-backends.md).
 
 **Air gap.** Mirror the images with `deploy/openshift/airgap/mirror.sh`, apply the
 cluster-scoped `IDMS`/`ITMS` objects with `kubectl apply -k deploy/openshift/airgap`, point
@@ -757,6 +805,7 @@ tests/                           router, eval, cost, deployment and release unit
 .github/workflows/ci.yml         tests, deployment validator and release chain on every push
 docker/                          gateway, simulator, QLoRA training and eval images
 src/gateway/                     OpenAI-compatible API, auth, quotas, proxy, policy use, audit
+src/gateway/backends.py          external backend keys, TLS verification, upstream calls, probes
 src/router/                      policy model, admission, canary, breakers, hash-chained audit
 src/tiersim/                     calibrated CPU / cloud tier simulator
 src/registry/                    signed release manifests: canonical JSON, Ed25519, drift checks
@@ -765,6 +814,7 @@ src/eval/                        golden-set scoring, floors and drift gate
 src/cost/                        ownership TCO, utilisation sweep and break-even
 deploy/observability/grafana/    provisioned datasource and dashboard
 deploy/kustomize/                base, openshift/vanilla/airgap overlays, shared components
+deploy/kustomize/components/cloud-egress/  opt-in TCP 443 egress to one provider range
 deploy/openshift/airgap/         IDMS/ITMS, mirrored image list and mirror script
 deploy/policies/                 Kyverno ClusterPolicies enforced at admission
 deploy/gitops/                   Argo CD project, app-of-apps and child Applications

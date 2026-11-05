@@ -38,6 +38,8 @@ dashboard **SLM Serving Fabric** plots the first seven series.
 | `FallbackSpike` | `sum(rate(gateway_fallback_total[5m])) > 0.1` | 10m | Sustained fallback to a standby | RB-01 |
 | `AuditChainBroken` | `GET /v1/audit/verify` returns `ok: false` | — | Tampering or corruption | RB-04 |
 | `AuditWriteFailing` | *not exposed yet* — add `gateway_audit_write_failures_total` | — | Requests may be unrecorded | RB-04, C-04 |
+| `ExternalBackendDown` | `sum by (alias, candidate) (increase(gateway_backend_probe_total{result="down"}[5m])) > 2` | 10m | Health probes to an external candidate are failing; its breaker will open | RB-13 |
+| `ExternalBackendUnconfigured` | `sum by (alias, candidate) (increase(gateway_backend_probe_total{result="unconfigured"}[15m])) > 0` | 15m | An external candidate has no key in the mounted Secret and is vetoed | RB-13 |
 | `CertExpiry` | Route/Ingress certificate < 14 days | — | Edge TLS expiry | RB-08 |
 
 The audit check is not a metric today; it is a probe the operator or an external monitor
@@ -251,12 +253,47 @@ the running count for more than ten minutes, or the count oscillates between syn
 6. Never point the scaler at the gateway. If the gateway is short of capacity, that is RB-10
    or RB-09 — the answer is routing and quota, not a second copy of in-process state.
 
+### RB-13 — External backend is down, unconfigured or unreachable
+
+**Signal:** `ExternalBackendDown`, `ExternalBackendUnconfigured`, `SlmBreakerOpen` on an
+external candidate, or every request refusing with `backend-unconfigured`. Start with
+`GET /health`: it lists external candidate names under `external.configured` and
+`external.unconfigured`. It never lists keys.
+
+1. **Unconfigured** — the candidate is vetoed before any network call. Check that
+   `Secret/slm-backend-keys` exists and that `keys.yaml` contains the `access.key` named in
+   the policy:
+   `kubectl -n slm-fabric get secret slm-backend-keys -o jsonpath='{.data.keys\.yaml}' | base64 -d | sed 's/:.*/: <redacted>/'`.
+   Never print the values into a ticket or chat. Fix the Secret, then restart the gateway:
+   the keys file is read once at startup.
+2. **Down** — `gateway_backend_probe_total{result="down"}` rising means the probe's
+   `GET /health` either got a 5xx or failed at transport/TLS level. A 4xx is treated as
+   reachable, so a 401/403 from the provider usually means the key was revoked, not that the
+   host is down. Check the provider's status page and the gateway log for a TLS error; a
+   certificate that does not chain to the system store needs `SLM_BACKEND_CA` pointing at a
+   mounted bundle, and a configured bundle that is missing stops the process rather than
+   silently trusting public roots.
+3. **Breaker open** — the probe feeds the same per-alias/candidate breaker as tenant traffic,
+   so an open breaker here is expected while the provider is down. Do not raise the failure
+   threshold to hide it; either the provider recovers and the probe closes the breaker, or
+   remove the candidate from the policy (`POST /v1/policy/reload`) and let in-cluster
+   standbys carry the alias.
+4. **Egress** — if the probe fails instantly and the provider status is green, confirm the
+   overlay includes `components/cloud-egress` and that its `ipBlock` covers the provider's
+   current public range. `NetworkPolicy` cannot express a DNS name; a range change is a
+   manifest change. Private endpoints are reached as in-cluster/peered addresses and do not
+   need this rule.
+5. **After an incident** — rotate the key at the provider, update the Secret, restart, and
+   confirm the probe counter turns `up` before removing the incident tag. Rotation is a
+   restart today (R-18).
+
 ## Backup and restore
 
 | Item | Backup | Restore | Tested |
 |---|---|---|---|
 | Routing policy | Git | Revert + reload | Yes, in drills |
 | Tenant keys | Secret in the cluster's secret store (not Git) | Recreate with `make deploy-secret` | No |
+| External backend keys | Secret in the cluster's secret store (not Git) | Recreate `slm-backend-keys`; restart the gateway to reread | No |
 | Audit trail | Volume snapshot + external head hash | Restore file; verify chain | No |
 | Model weights | Re-download (connected) or mirror (air gap) | Seed the model PVC | Partially (connected) |
 | Adapter weights | Retrain (`make adapter-train`) or artifact registry | Seed the adapter PVC | No |

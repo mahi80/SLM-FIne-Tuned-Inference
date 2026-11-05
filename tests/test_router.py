@@ -109,6 +109,35 @@ aliases:
         sovereign: true
 """
 
+EXTERNAL_POLICY = """
+version: "test-external"
+aliases:
+  burst:
+    primary: gpu
+    candidates:
+      - name: gpu
+        compute: gpu
+        deployment: onprem
+        pool: gpu-pool
+        backend: http://gpu:8000
+        upstream_model: model-gpu
+        serves_regions: [eu, us]
+        sovereign: true
+        max_context: 100
+      - name: cloud
+        compute: gpu
+        deployment: cloud
+        pool: cloud-pool
+        backend: https://inference.example.com
+        upstream_model: model-cloud
+        serves_regions: [eu, us]
+        sovereign: false
+        priority: 5
+        max_context: 100
+        access:
+          key: external-prod
+"""
+
 
 class Clock:
     def __init__(self) -> None:
@@ -146,10 +175,13 @@ class Workspace(unittest.TestCase):
         path.write_text(text, encoding="utf-8")
         return path
 
-    def engine(self, text: str = POLICY):
+    def engine(self, text: str = POLICY, backend_ready=None):
         policy = load_policy(str(self.policy_file(text)))
         clock = Clock()
-        return PolicyEngine(policy, CircuitBreakers(policy.breaker, clock)), clock
+        return (
+            PolicyEngine(policy, CircuitBreakers(policy.breaker, clock), backend_ready),
+            clock,
+        )
 
 
 class PolicyLoadingTest(Workspace):
@@ -274,6 +306,91 @@ class AdmissionTest(Workspace):
         reasons = {item.candidate: item.reason for item in decision.considered}
         self.assertEqual(reasons["cloud"], "deployment-denied")
         self.assertEqual(reasons["cpu"], "compute-denied")
+
+
+class ExternalBackendTest(Workspace):
+    def test_access_is_parsed_with_safe_defaults(self) -> None:
+        policy = load_policy(str(self.policy_file(EXTERNAL_POLICY)))
+        cloud = policy.aliases["burst"].candidates["cloud"]
+        self.assertTrue(cloud.external)
+        self.assertEqual(cloud.access.key, "external-prod")
+        self.assertEqual(cloud.access.header, "authorization")
+        self.assertEqual(cloud.access.prefix, "Bearer ")
+
+    def test_in_cluster_candidate_is_not_external(self) -> None:
+        policy = load_policy(str(self.policy_file(EXTERNAL_POLICY)))
+        self.assertFalse(policy.aliases["burst"].candidates["gpu"].external)
+
+    def test_external_backend_must_use_https(self) -> None:
+        bad = EXTERNAL_POLICY.replace(
+            "backend: https://inference.example.com", "backend: http://inference.example.com"
+        )
+        with self.assertRaises(ValueError):
+            load_policy(str(self.policy_file(bad)))
+
+    def test_external_backend_must_not_embed_credentials(self) -> None:
+        bad = EXTERNAL_POLICY.replace(
+            "backend: https://inference.example.com",
+            "backend: https://user:secret@inference.example.com",
+        )
+        with self.assertRaises(ValueError):
+            load_policy(str(self.policy_file(bad)))
+
+    def test_external_backend_must_not_carry_a_query(self) -> None:
+        bad = EXTERNAL_POLICY.replace(
+            "backend: https://inference.example.com",
+            "backend: https://inference.example.com?key=leak",
+        )
+        with self.assertRaises(ValueError):
+            load_policy(str(self.policy_file(bad)))
+
+    def test_access_key_must_be_a_name(self) -> None:
+        bad = EXTERNAL_POLICY.replace("key: external-prod", "key: ''")
+        with self.assertRaises(ValueError):
+            load_policy(str(self.policy_file(bad)))
+
+    def test_access_header_cannot_inject_headers(self) -> None:
+        bad = EXTERNAL_POLICY.replace(
+            "key: external-prod", "key: external-prod\n          header: \"X-Key: a\\r\\nHost: evil\""
+        )
+        with self.assertRaises(ValueError):
+            load_policy(str(self.policy_file(bad)))
+
+    def test_access_prefix_cannot_contain_a_line_break(self) -> None:
+        bad = EXTERNAL_POLICY.replace(
+            "key: external-prod", "key: external-prod\n          prefix: \"Bearer \\n\""
+        )
+        with self.assertRaises(ValueError):
+            load_policy(str(self.policy_file(bad)))
+
+    def test_unconfigured_external_backend_is_vetoed(self) -> None:
+        engine, _ = self.engine(EXTERNAL_POLICY, backend_ready=lambda candidate: False)
+        cloud_only = tenant(
+            region="eu", data_class="internal", allowed_deployment=("cloud",)
+        )
+        decision = engine.decide("burst", cloud_only, "req-1", 10)
+        self.assertIsNone(decision.chosen)
+        reasons = {item.candidate: item.reason for item in decision.considered}
+        self.assertEqual(reasons["cloud"], "backend-unconfigured")
+
+    def test_configured_external_backend_is_a_standby(self) -> None:
+        engine, _ = self.engine(EXTERNAL_POLICY, backend_ready=lambda candidate: True)
+        for _ in range(3):
+            engine.breakers.record_failure(key("burst", "gpu"))
+        decision = engine.decide("burst", tenant(region="eu", data_class="internal"), "req-1", 10)
+        self.assertEqual(decision.chosen.name, "cloud")
+        self.assertEqual(decision.kind, "standby")
+
+    def test_reload_keeps_the_backend_readiness_view(self) -> None:
+        store = PolicyStore(self.policy_file(EXTERNAL_POLICY), backend_ready=lambda candidate: False)
+        policy = store.reload()
+        self.assertIn("burst", policy.aliases)
+        cloud_only = tenant(
+            region="eu", data_class="internal", allowed_deployment=("cloud",)
+        )
+        decision = store.engine.decide("burst", cloud_only, "req-1", 10)
+        reasons = {item.candidate: item.reason for item in decision.considered}
+        self.assertEqual(reasons["cloud"], "backend-unconfigured")
 
 
 class CanaryTest(Workspace):

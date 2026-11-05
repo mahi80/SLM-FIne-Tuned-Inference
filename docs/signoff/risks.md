@@ -22,7 +22,8 @@ Each entry says what exists today, what is left after mitigation, and which cond
 | [R-14](#r-14--audit-failure-does-not-fail-the-request) | Audit write failure does not fail the request | Low | Medium | Medium | C-04 |
 | [R-15](#r-15--single-runtime) | Only vLLM is evidenced | Medium | Medium | Medium | — |
 | [R-16](#r-16--no-dependency-or-image-scanning) | No dependency or image scanning in CI | Medium | High | **High** | C-09 |
-| [R-17](#r-17--cloud-pools-are-declared-but-not-reachable) | Cloud pools are declared but not reachable | High | Medium | Medium | C-01 |
+| [R-17](#r-17--cloud-pools-are-declared-but-not-reachable) | Cloud pools are declared but not reachable | Medium | Medium | Medium | C-01 |
+| [R-18](#r-18--external-backend-path-is-unproven-against-a-provider) | External backend path is unproven against a real provider | Medium | High | **High** | C-01 |
 
 ---
 
@@ -241,22 +242,43 @@ claim.
 
 **What exists.** `config/capacity.yaml` declares three pools, and `deploy/cloud/` carries the
 node-pool contracts for EKS, AKS, GKE and on-prem OpenShift. `cloud-burst` is marked
-`provider: simulated`, so no reviewer can mistake it for working cloud capacity.
+`provider: simulated`, so no reviewer can mistake it for working cloud capacity. Stage 2
+added the path an external pool needs: `external: true`, an `access` key reference, an
+optional key Secret, CA verification, health probes and an opt-in egress rule.
 
-**Residual.** No snippet in `deploy/cloud/` has been applied to a provider, and the gateway
-egress policy still only allows in-cluster Pods. A team that applies a snippet will get
-nodes, not a route: the endpoint, TLS, credentials and egress rules are Stage 3. The registry
-can also describe more replicas than the cluster has GPUs, in which case extra pods stay
-Pending instead of failing loudly.
+**Residual.** No snippet in `deploy/cloud/` has been applied to a provider, no candidate in
+the shipped policy is external, and the shipped egress component carries a TEST-NET-2
+placeholder. A team that applies a snippet will get nodes; a team that adds a candidate gets
+a route that the validator will insist is complete, but no provider has accepted the key or
+the certificate yet. The registry can also describe more replicas than the cluster has GPUs,
+in which case extra pods stay Pending instead of failing loudly.
 
 **Closure.** Provision one provider pool end to end: apply the snippet, add the external
-backend with TLS and workload identity, widen egress, and attach the measurement (C-01).
-Until then, keep the simulator label and do not set the registry's `max` above the GPUs
-actually provisioned.
+pool and candidate, create `slm-backend-keys`, replace the placeholder CIDR, and attach the
+measured result (C-01). Until then, keep the simulator label and do not set the registry's
+`max` above the GPUs actually provisioned.
+
+### R-18 — External backend path is unproven against a provider
+
+**What exists.** The rules are encoded and tested: HTTPS-only external candidates with no
+userinfo or query, header names restricted to a token so a policy cannot inject headers,
+secrets read from a mounted file and never echoed, `backend-unconfigured` as an admission
+veto, probes feeding the same breakers as tenant traffic, and a validator that rejects
+default, private and non-443 egress. `tests/test_backends.py` exercises TLS verification
+against a throwaway self-signed server.
+
+**Residual.** No live cloud endpoint was called, so provider-side authentication, DNS,
+egress enforcement, certificate rotation and rate limits are unobserved. Bearer keys are
+static: rotation is a Secret update plus a gateway restart, because the keys file is read at
+startup. There is no per-tenant cap on external spend or egress volume.
+
+**Closure.** One provider route in a staging account, with a rotation rehearsal and a
+sustained probe/failover record (C-01). A workload-identity mode and a per-pool cost/latency
+budget are the following slices.
 
 ## Accepted risks summary
 
 Five risks are accepted as-is for a reference build: R-13 (artifacts by design), R-15
 (single runtime is the scope), R-05 (no mTLS until there is a cluster), R-08 (single writer is
 documented as a constraint) and R-14 (availability trade-off is deliberate). The remaining
-twelve require a closing action before regulated production use.
+thirteen require a closing action before regulated production use.
