@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "release_id": "slm-0.5.0",
-  "created_at": "2026-11-04T23:49:27Z",
+  "created_at": "2026-11-05T01:16:02Z",
   "source": {
-    "commit": "4a703099ffb481ae52f36e68a9dafeabee6f872c",
+    "commit": "770ad7a5733352f7ad5a5f9bab870ff106b78bbf",
     "dirty": false
   },
   "model": {
@@ -96,7 +96,7 @@
   "policy": {
     "path": "config/policy.yaml",
     "version": "2026-11-04.1",
-    "sha256": "b0f1fc800bf779e33e2ac63d60b9c1ee213cef3ac88c19f4d5fb43127c1c097c"
+    "sha256": "467738c0a97fabd53345fa43210b780a8ab3412eb4803f2dd6e0f400bbb2b6cc"
   },
   "gate": {
     "report": "bench/results/eval-gate.json",
