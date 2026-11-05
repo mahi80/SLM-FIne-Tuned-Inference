@@ -22,6 +22,7 @@ Each entry says what exists today, what is left after mitigation, and which cond
 | [R-14](#r-14--audit-failure-does-not-fail-the-request) | Audit write failure does not fail the request | Low | Medium | Medium | C-04 |
 | [R-15](#r-15--single-runtime) | Only vLLM is evidenced | Medium | Medium | Medium | — |
 | [R-16](#r-16--no-dependency-or-image-scanning) | No dependency or image scanning in CI | Medium | High | **High** | C-09 |
+| [R-17](#r-17--cloud-pools-are-declared-but-not-reachable) | Cloud pools are declared but not reachable | High | Medium | Medium | C-01 |
 
 ---
 
@@ -236,9 +237,26 @@ claim.
 **Closure.** Add `pip-audit`/`trivy` to CI with a severity threshold and an exception list
 (C-09).
 
+### R-17 — Cloud pools are declared but not reachable
+
+**What exists.** `config/capacity.yaml` declares three pools, and `deploy/cloud/` carries the
+node-pool contracts for EKS, AKS, GKE and on-prem OpenShift. `cloud-burst` is marked
+`provider: simulated`, so no reviewer can mistake it for working cloud capacity.
+
+**Residual.** No snippet in `deploy/cloud/` has been applied to a provider, and the gateway
+egress policy still only allows in-cluster Pods. A team that applies a snippet will get
+nodes, not a route: the endpoint, TLS, credentials and egress rules are Stage 3. The registry
+can also describe more replicas than the cluster has GPUs, in which case extra pods stay
+Pending instead of failing loudly.
+
+**Closure.** Provision one provider pool end to end: apply the snippet, add the external
+backend with TLS and workload identity, widen egress, and attach the measurement (C-01).
+Until then, keep the simulator label and do not set the registry's `max` above the GPUs
+actually provisioned.
+
 ## Accepted risks summary
 
 Five risks are accepted as-is for a reference build: R-13 (artifacts by design), R-15
 (single runtime is the scope), R-05 (no mTLS until there is a cluster), R-08 (single writer is
 documented as a constraint) and R-14 (availability trade-off is deliberate). The remaining
-eleven require a closing action before regulated production use.
+twelve require a closing action before regulated production use.

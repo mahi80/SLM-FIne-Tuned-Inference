@@ -5,9 +5,10 @@ review, and rolled back by restoring the previous file. The gateway never
 routes to a backend that is not described here.
 
 An alias is what a client asks for. A candidate is a place the request can run:
-a tier, a backend, a region, and the model version that backend serves. Every
-alias has exactly one primary; the remaining candidates are standbys, except
-the one named by the optional canary.
+a pool, a compute type, an on-prem or cloud deployment, a backend, a region,
+and the model version that backend serves. Every alias has exactly one primary;
+the remaining candidates are standbys, except the one named by the optional
+canary.
 """
 
 from __future__ import annotations
@@ -18,6 +19,8 @@ from pathlib import Path
 import yaml
 
 TIERS = frozenset({"gpu", "cpu", "cloud"})
+COMPUTE = frozenset({"gpu", "cpu"})
+DEPLOYMENTS = frozenset({"onprem", "cloud"})
 STICKY_KEYS = frozenset({"tenant", "request"})
 DATA_CLASSES = frozenset({"public", "internal", "confidential", "restricted"})
 
@@ -34,7 +37,9 @@ def _require_keys(raw: dict, required: set[str], optional: set[str], where: str)
 @dataclass(frozen=True)
 class Candidate:
     name: str
-    tier: str
+    compute: str
+    deployment: str
+    pool: str
     backend: str
     upstream_model: str
     region: str
@@ -44,6 +49,14 @@ class Candidate:
     max_context: int
     cost_per_1k_out: float
     model_version: str
+
+    @property
+    def tier(self) -> str:
+        """The label clients and tenant allowlists see. A cloud deployment is
+        `cloud` whatever hardware it runs; an on-prem candidate is named by its
+        compute. Hardware and location are separate fields because a tenant may
+        allow GPUs but forbid leaving the perimeter."""
+        return "cloud" if self.deployment == "cloud" else self.compute
 
 
 @dataclass(frozen=True)
@@ -90,7 +103,7 @@ class Policy:
 def _candidate(raw: dict, where: str) -> Candidate:
     _require_keys(
         raw,
-        {"name", "tier", "backend", "upstream_model"},
+        {"name", "compute", "deployment", "pool", "backend", "upstream_model"},
         {
             "region",
             "serves_regions",
@@ -102,9 +115,17 @@ def _candidate(raw: dict, where: str) -> Candidate:
         },
         where,
     )
-    tier = str(raw["tier"])
-    if tier not in TIERS:
-        raise ValueError(f"{where}: tier must be one of {sorted(TIERS)}, got '{tier}'")
+    compute = str(raw["compute"])
+    if compute not in COMPUTE:
+        raise ValueError(f"{where}: compute must be one of {sorted(COMPUTE)}, got '{compute}'")
+    deployment = str(raw["deployment"])
+    if deployment not in DEPLOYMENTS:
+        raise ValueError(
+            f"{where}: deployment must be one of {sorted(DEPLOYMENTS)}, got '{deployment}'"
+        )
+    pool = str(raw["pool"]).strip()
+    if not pool:
+        raise ValueError(f"{where}: pool must not be empty")
     serves = raw.get("serves_regions") or ["*"]
     if not isinstance(serves, list) or not all(isinstance(item, str) and item for item in serves):
         raise ValueError(f"{where}: serves_regions must be a list of non-empty strings")
@@ -117,7 +138,9 @@ def _candidate(raw: dict, where: str) -> Candidate:
     upstream_model = str(raw["upstream_model"])
     return Candidate(
         name=str(raw["name"]),
-        tier=tier,
+        compute=compute,
+        deployment=deployment,
+        pool=pool,
         backend=str(raw["backend"]).rstrip("/"),
         upstream_model=upstream_model,
         region=str(raw.get("region", "onprem")),

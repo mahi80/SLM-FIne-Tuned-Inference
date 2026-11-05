@@ -117,7 +117,7 @@ Three properties from earlier phases made the deployment design non-obvious:
   contexts, resources, probes, Service/policy wiring, ConfigMap equality, single-replica
   gateway, no Secrets, namespace placement, GPU scaling policy, overlay-specific exposure.
 - 43 deployment tests (synthetic negative cases plus rendered-overlay integration); the
-  full suite is 153 tests.
+  full suite is 168 tests.
 - The GPU tier scales through KEDA on the operator overlays: `config/capacity.yaml` holds the
   bounds and both trigger thresholds, the `ScaledObject` reads vLLM's queue-depth and KV-cache
   gauges, replicas are removed from Git, the model and adapter claims are `ReadWriteMany`, and

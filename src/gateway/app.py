@@ -317,6 +317,9 @@ def policy_view(policy: Policy) -> dict:
         return {
             "name": candidate.name,
             "tier": candidate.tier,
+            "compute": candidate.compute,
+            "deployment": candidate.deployment,
+            "pool": candidate.pool,
             "backend": candidate.backend,
             "upstream_model": candidate.upstream_model,
             "model_version": candidate.model_version,

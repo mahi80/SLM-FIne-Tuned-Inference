@@ -1,7 +1,10 @@
 import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+
+import yaml
 
 from tools import validate_deploy as vd
 
@@ -298,13 +301,21 @@ class AlertChecks(unittest.TestCase):
 
 class AutoscalingChecks(unittest.TestCase):
     CAPACITY = vd.load_capacity()
+    POOL = CAPACITY["pools"]["onprem-gpu"]
+
+    @classmethod
+    def registry(cls, **pool_overrides):
+        return {
+            "version": cls.CAPACITY["version"],
+            "pools": {"onprem-gpu": {**cls.POOL, **pool_overrides}},
+        }
 
     @classmethod
     def scaled_object(cls, **overrides):
         spec = {
             "scaleTargetRef": {"apiVersion": "apps/v1", "kind": "Deployment", "name": "vllm-gpu"},
-            "minReplicaCount": cls.CAPACITY["min_replicas"],
-            "maxReplicaCount": cls.CAPACITY["max_replicas"],
+            "minReplicaCount": cls.POOL["min_replicas"],
+            "maxReplicaCount": cls.POOL["max_replicas"],
             "triggers": [
                 {
                     "type": "prometheus",
@@ -316,7 +327,7 @@ class AutoscalingChecks(unittest.TestCase):
                         "serverAddress": "http://prometheus-operated.monitoring.svc:9090",
                     },
                 }
-                for metric in cls.CAPACITY["metrics"]
+                for metric in cls.POOL["metrics"]
             ],
         }
         spec.update(overrides)
@@ -349,6 +360,10 @@ class AutoscalingChecks(unittest.TestCase):
     def gpu_deployment(*args):
         doc = deployment(name="vllm-gpu", args=list(args) or None)
         del doc["spec"]["replicas"]
+        doc["spec"]["template"]["spec"]["volumes"] = [
+            {"name": "model-cache", "persistentVolumeClaim": {"claimName": "slm-model-cache"}},
+            {"name": "adapters", "persistentVolumeClaim": {"claimName": "slm-adapters"}},
+        ]
         return doc
 
     def docs(self, deployment_doc=None, adapter_configmap=None, **overrides):
@@ -372,9 +387,13 @@ class AutoscalingChecks(unittest.TestCase):
         self.assertTrue(any("scales the gateway" in error for error in errors))
 
     def test_gpu_floor_cannot_be_zero(self):
-        capacity = {**self.CAPACITY, "min_replicas": 0}
-        errors = vd.check_autoscaling(self.docs(), capacity)
+        errors = vd.check_autoscaling(self.docs(), self.registry(min_replicas=0))
         self.assertTrue(any("warm floor" in error for error in errors))
+
+    def test_a_pool_that_scales_needs_a_metric(self):
+        errors = vd.check_autoscaling(self.docs(), self.registry(metrics=[]))
+        self.assertTrue(any("declares no metric" in error for error in errors))
+        self.assertTrue(any("declares no scaling metric" in error for error in errors))
 
     def test_pinned_replicas_fight_the_scaler(self):
         doc = self.gpu_deployment("--lora-modules", "triage-v1=/adapters/triage-v1", "triage-v2=/adapters/triage-v2")
@@ -414,6 +433,145 @@ class AutoscalingChecks(unittest.TestCase):
         partial = self.gpu_deployment("--lora-modules", "triage-v1=/adapters/triage-v1")
         errors = vd.check_autoscaling(self.docs(deployment_doc=partial), self.CAPACITY)
         self.assertTrue(any("triage-v2" in error for error in errors))
+
+
+class PoolChecks(unittest.TestCase):
+    """The registry is the one place a route may point, so drift is an error."""
+
+    CAPACITY = vd.load_capacity()
+
+    def check(self, candidate):
+        policy = {"aliases": {"slm-small": {"candidates": [candidate]}}}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "policy.yaml"
+            path.write_text(yaml.safe_dump(policy), encoding="utf-8")
+            return vd.check_pools(self.CAPACITY, path)
+
+    def candidate(self, **overrides):
+        body = {
+            "name": "gpu",
+            "compute": "gpu",
+            "deployment": "onprem",
+            "pool": "onprem-gpu",
+            "backend": "http://vllm-gpu:8000",
+        }
+        body.update(overrides)
+        return body
+
+    def test_repository_candidates_resolve_to_declared_pools(self):
+        self.assertEqual(vd.check_pools(self.CAPACITY, REPO / "config/policy.yaml"), [])
+
+    def test_unknown_pool_is_rejected(self):
+        errors = self.check(self.candidate(pool="onprem-h100"))
+        self.assertTrue(any("does not declare" in error for error in errors))
+
+    def test_candidate_compute_must_match_the_pool(self):
+        errors = self.check(self.candidate(compute="cpu"))
+        self.assertTrue(any("compute 'cpu'" in error for error in errors))
+
+    def test_candidate_deployment_must_match_the_pool(self):
+        errors = self.check(self.candidate(deployment="cloud"))
+        self.assertTrue(any("deployment 'cloud'" in error for error in errors))
+
+    def test_candidate_backend_must_be_the_pool_endpoint(self):
+        errors = self.check(self.candidate(backend="http://vllm-gpu:8001"))
+        self.assertTrue(any("endpoint" in error for error in errors))
+
+    def test_trailing_slash_normalises(self):
+        self.assertEqual(self.check(self.candidate(backend="http://vllm-gpu:8000/")), [])
+
+    def test_registry_rejects_duplicate_pools(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "capacity.yaml"
+            path.write_text(
+                yaml.safe_dump(
+                    {
+                        "version": 2,
+                        "pools": [
+                            {
+                                "name": "onprem-gpu",
+                                "compute": "gpu",
+                                "deployment": "onprem",
+                                "endpoint": "http://vllm-gpu:8000",
+                                "workload": "vllm-gpu",
+                                "replicas": {"min": 1, "max": 1},
+                                "node_pool": {"label": "nvidia.com/gpu.present"},
+                            }
+                        ]
+                        * 2,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaises(RuntimeError):
+                vd.load_capacity(path)
+
+    def test_registry_rejects_inverted_bounds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "capacity.yaml"
+            path.write_text(
+                yaml.safe_dump(
+                    {
+                        "pools": [
+                            {
+                                "name": "onprem-gpu",
+                                "compute": "gpu",
+                                "deployment": "onprem",
+                                "endpoint": "http://vllm-gpu:8000",
+                                "workload": "vllm-gpu",
+                                "replicas": {"min": 3, "max": 1},
+                                "node_pool": {"label": "nvidia.com/gpu.present"},
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaises(RuntimeError):
+                vd.load_capacity(path)
+
+
+class CloudPoolSnippets(unittest.TestCase):
+    """Node pools are provisioned outside the app tree, so nothing else checks them."""
+
+    CLOUD = REPO / "deploy/cloud"
+    CAPACITY = vd.load_capacity()
+
+    def test_yaml_pools_carry_the_gpu_contract(self):
+        gpu_pool = self.CAPACITY["pools"]["onprem-gpu"]["node_pool"]
+        documents = [
+            doc
+            for path in sorted(self.CLOUD.glob("*.yaml"))
+            for doc in yaml.safe_load_all(path.read_text(encoding="utf-8"))
+            if doc and doc.get("kind") == "NodePool" and "gpu" in doc["metadata"]["name"]
+        ]
+        self.assertTrue(documents)
+        for doc in documents:
+            with self.subTest(pool=doc["metadata"]["name"]):
+                template = doc["spec"]["template"]
+                self.assertEqual(template["metadata"]["labels"][gpu_pool["label"]], "true")
+                taints = {taint["key"] for taint in template["spec"]["taints"]}
+                self.assertIn(gpu_pool["taint"], taints)
+
+    def test_scripts_are_parseable_and_apply_the_contract(self):
+        gpu_pool = self.CAPACITY["pools"]["onprem-gpu"]["node_pool"]
+        cpu_pool = self.CAPACITY["pools"]["onprem-cpu"]["node_pool"]
+        scripts = sorted(self.CLOUD.glob("*.sh"))
+        self.assertTrue(scripts)
+        for path in scripts:
+            with self.subTest(script=path.name):
+                subprocess.run(
+                    ["bash", "-n", path.relative_to(REPO).as_posix()],
+                    cwd=REPO,
+                    check=True,
+                    capture_output=True,
+                )
+                text = path.read_text(encoding="utf-8")
+                self.assertIn(f"{gpu_pool['label']}=true", text)
+                self.assertIn(f"{gpu_pool['taint']}=", text)
+                if "nodepools" in path.name:
+                    self.assertIn(f"{cpu_pool['label']}=cpu", text)
+                    self.assertIn(f"{cpu_pool['taint']}=cpu", text)
 
 
 class WiringChecks(unittest.TestCase):
@@ -522,12 +680,13 @@ class RenderedOverlays(unittest.TestCase):
 
     def test_gpu_scaler_ships_with_operator_overlays(self):
         capacity = vd.load_capacity()
+        pool = capacity["pools"]["onprem-gpu"]
         for overlay in ("openshift", "airgap"):
             with self.subTest(overlay=overlay):
                 docs = vd.render_overlay(overlay)
                 scaled = next(doc for doc in docs if doc.get("kind") == "ScaledObject")
-                self.assertEqual(scaled["spec"]["minReplicaCount"], capacity["min_replicas"])
-                self.assertEqual(scaled["spec"]["maxReplicaCount"], capacity["max_replicas"])
+                self.assertEqual(scaled["spec"]["minReplicaCount"], pool["min_replicas"])
+                self.assertEqual(scaled["spec"]["maxReplicaCount"], pool["max_replicas"])
                 self.assertEqual(vd.check_autoscaling(docs, capacity), [])
                 vllm = next(doc for doc in docs if doc.get("kind") == "Deployment" and doc["metadata"]["name"] == "vllm-gpu")
                 self.assertNotIn("replicas", vllm["spec"])

@@ -1,58 +1,112 @@
-# Capacity policy for the GPU tier, and the source of truth for its scaler.
+# Pool registry: every place the router may send work, and the capacity policy
+# for each. A candidate in config/policy.yaml names one of these pools; the
+# deploy validator fails if it names one that is not declared here, or if the
+# candidate's compute/deployment disagrees with the pool.
 #
-# tools/validate_deploy.py fails when the rendered KEDA ScaledObject disagrees
-# with this file, so a threshold change is a reviewed edit here rather than an
-# out-of-band `kubectl edit` on the HPA.
+# `modelled: true` means no real hardware stands behind the route yet — the
+# tier is a calibrated simulator. `provider: simulated` marks the same thing
+# for a route that is meant to become a cloud endpoint.
 #
-# Only the GPU tier autoscales today. The CPU simulators are cheap enough to
-# keep at one replica, and the cloud standby is gated by tenant policy — adding
-# capacity there is a routing decision, not a load decision.
-version: 1
+# Node-pool manifests for AWS, Azure, GCP and on-prem GPU workers live under
+# deploy/cloud/; each one applies the label and taint recorded per pool.
+version: 2
 
-gpu:
-  workload: vllm-gpu
+pools:
+  - name: onprem-gpu
+    compute: gpu
+    deployment: onprem
+    provider: onprem
+    modelled: false
+    endpoint: http://vllm-gpu:8000
+    workload: vllm-gpu
 
-  # A replica owns a whole GPU and reloads weights on start (minutes, not
-  # seconds), so the floor is one warm replica and scale-up is one pod per
-  # period. Zero would trade every request for a cold start.
-  min_replicas: 1
-  max_replicas: 3
-  gpus_per_replica: 1
+    # A replica owns a whole GPU and reloads weights on start (minutes, not
+    # seconds), so the floor is one warm replica and scale-up is one pod per
+    # period. Zero would trade every request for a cold start.
+    replicas:
+      min: 1
+      max: 3
+    gpus_per_replica: 1
 
-  # Triggers are OR-ed by KEDA: whichever asks for more replicas wins.
-  metrics:
-    - name: queue_depth
-      keda_metric: vllm_queue_depth
-      # A summed queue divided by the threshold is the replica count, so four
-      # waiting per replica is the line — not one global number.
-      query: 'sum(vllm:num_requests_waiting{namespace="slm-fabric"})'
-      threshold: "4"
-      why: >-
-        vLLM admits 16 sequences at a time. A quarter of a batch waiting per
-        replica means the next token is already late.
+    # Triggers are OR-ed by KEDA: whichever asks for more replicas wins.
+    metrics:
+      - name: queue_depth
+        keda_metric: vllm_queue_depth
+        # A summed queue divided by the threshold is the replica count, so four
+        # waiting per replica is the line — not one global number.
+        query: 'sum(vllm:num_requests_waiting{namespace="slm-fabric"})'
+        threshold: "4"
+        why: >-
+          vLLM admits 16 sequences at a time. A quarter of a batch waiting per
+          replica means the next token is already late.
 
-    - name: kv_cache
-      keda_metric: vllm_kv_cache
-      query: 'avg(vllm:gpu_cache_usage_perc{namespace="slm-fabric"})'
-      threshold: "0.85"
-      why: >-
-        Above roughly 85% the engine starts preempting sequences. Queue depth
-        reacts after that, which is too late for the latency SLO.
+      - name: kv_cache
+        keda_metric: vllm_kv_cache
+        query: 'avg(vllm:gpu_cache_usage_perc{namespace="slm-fabric"})'
+        threshold: "0.85"
+        why: >-
+          Above roughly 85% the engine starts preempting sequences. Queue depth
+          reacts after that, which is too late for the latency SLO.
 
-  # Conditions the manifests enforce before replicas may exceed one.
-  prerequisites:
-    # Each replica mounts the model cache and the adapter set. A
-    # ReadWriteOnce claim attaches to a single node, so a second replica on a
-    # new GPU node cannot start.
-    storage_access_mode: ReadWriteMany
-    # A replica that starts without the declared adapters would serve base
-    # weights for a fine-tuned alias. vLLM preloads the set at startup.
-    preload_adapters: true
+    # Conditions the manifests enforce before replicas may exceed one.
+    prerequisites:
+      # Each replica mounts the model cache and the adapter set. A
+      # ReadWriteOnce claim attaches to a single node, so a second replica on a
+      # new GPU node cannot start.
+      storage_access_mode: ReadWriteMany
+      # A replica that starts without the declared adapters would serve base
+      # weights for a fine-tuned alias. vLLM preloads the set at startup.
+      preload_adapters: true
 
-  # Nodes are added by the cluster's node autoscaler (Karpenter, Cluster
-  # Autoscaler, or OpenShift MachineAutoscaler). Without one, replicas beyond
-  # the available GPUs stay Pending and the queue keeps growing.
-  node_pool:
-    label: nvidia.com/gpu.present
-    taint: nvidia.com/gpu
-    autoscaler: external
+    # Nodes are added by the cluster's node autoscaler (Karpenter, Cluster
+    # Autoscaler, or OpenShift MachineAutoscaler). Without one, replicas beyond
+    # the available GPUs stay Pending and the queue keeps growing.
+    node_pool:
+      label: nvidia.com/gpu.present
+      taint: nvidia.com/gpu
+      autoscaler: external
+
+  - name: onprem-cpu
+    compute: cpu
+    deployment: onprem
+    provider: onprem
+    # Calibrated Xeon-class simulator; the pool contract is the real CPU tier.
+    modelled: true
+    endpoint: http://tiersim-cpu:8001
+    workload: tiersim-cpu
+
+    # CPU capacity here is cheap enough to keep warm and predictable. Scaling
+    # it would need its own latency SLO; until then a fixed replica is honest.
+    replicas:
+      min: 1
+      max: 1
+    metrics: []
+
+    node_pool:
+      label: slm.fabric/pool
+      value: cpu
+      taint: slm.fabric/pool
+      autoscaler: none
+
+  - name: cloud-burst
+    compute: gpu
+    deployment: cloud
+    # A route with no real provider behind it yet. deploy/cloud/ holds the
+    # node-pool manifests that make it real; until then the simulator answers
+    # and labels every response x-simulated.
+    provider: simulated
+    modelled: true
+    endpoint: http://tiersim-cloud:8001
+    workload: tiersim-cloud
+
+    # Stage 3 (external backend, TLS, credentials, egress) moves this to a
+    # managed endpoint with min 0; the simulator is one pinned replica.
+    replicas:
+      min: 1
+      max: 1
+    metrics: []
+
+    node_pool:
+      label: nvidia.com/gpu.present
+      taint: nvidia.com/gpu
+      autoscaler: external

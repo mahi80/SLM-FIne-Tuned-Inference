@@ -115,6 +115,8 @@ The validator is the review artifact. It re-renders the overlays and checks:
 - the overlay actually exposes what it claims: a Route or Ingress for the gateway, a
   ServiceMonitor and scrape policy on OpenShift, offline env in the air gap, and the five
   platform alerts on every overlay that installs the Prometheus Operator;
+- every candidate names a pool declared in `config/capacity.yaml`, and its compute,
+  deployment and backend agree with that pool;
 - the GPU scaler agrees with `config/capacity.yaml`, keeps a warm floor of at least one
   replica, shares the model and adapter claims `ReadWriteMany`, preloads every adapter the
   loader hook declares, and is never pointed at the gateway.
@@ -220,6 +222,37 @@ Vanilla and kind get no scaler at all — kind has neither KEDA nor a second GPU
 base Deployment keeps its single, explicitly pinned replica, and the validator rejects a
 scaler in that overlay.
 
+**Pools, not just tiers.** A `tier` used to say both what hardware a backend runs on and
+where it runs, so a cloud GPU was indistinguishable from a cloud CPU and no tenant could ask
+for "any GPU, on-prem only". A candidate now declares `compute: gpu|cpu` and
+`deployment: onprem|cloud`, names a `pool`, and the client-facing `tier` is derived — `cloud`
+when `deployment` is cloud, otherwise `compute`. Tenants gain `allowed_compute` and
+`allowed_deployment` beside `allowed_tiers`, all enforced in admission before scoring.
+
+Every candidate's pool must exist in `config/capacity.yaml`, which is now the registry of
+places work may land:
+
+| Pool | Compute | Deployment | Provider | Replicas | Autoscaler |
+|---|---|---|---|---|---|
+| `onprem-gpu` | gpu | onprem | onprem | 1–3 | KEDA + a node autoscaler |
+| `onprem-cpu` | cpu | onprem | onprem | 1–1 | none |
+| `cloud-burst` | gpu | cloud | simulated | 1–1 | external |
+
+`modelled: true` marks a pool with no real hardware behind it; `onprem-cpu` and `cloud-burst`
+are calibrated simulators today. `deploy/cloud/` holds the node-pool snippets that stand a
+pool up — Karpenter `NodePool`s for EKS, `az aks nodepool add`, `gcloud container
+node-pools create`, and a label/taint script for on-prem OpenShift workers. Each applies the
+same `nvidia.com/gpu.present` label, `nvidia.com/gpu` taint and `slm.fabric/pool=cpu` CPU
+contract the manifests already select, and the tests parse them so a typo cannot drift.
+
+Capability is not the same as a working route. The snippets buy machines; they do not make a
+cloud endpoint reachable. The gateway egress policy still allows only in-cluster Pods, and
+there is no TLS or backend-credential model for an external host. Until that exists,
+`cloud-burst` stays `provider: simulated` and every response it serves is labelled
+`x-simulated`. The validator enforces the three-way agreement (pool exists, compute and
+deployment match, backend equals the pool endpoint) so the registry cannot quietly describe
+capacity the router would never reach.
+
 **Air gap.** Mirror the images with `deploy/openshift/airgap/mirror.sh`, apply the
 cluster-scoped `IDMS`/`ITMS` objects with `kubectl apply -k deploy/openshift/airgap`, point
 `deploy/gitops/apps/platform.yaml` at `overlays/airgap`, and seed `slm-model-cache` from the
@@ -287,7 +320,7 @@ The review pack answers the questions a reviewer actually asks, in order:
 |---|---|
 | [requirements.md](signoff/requirements.md) | What was asked, requirement by requirement, and which ones are not met |
 | [c4.md](architecture/c4.md) | What the system is: L1–L4 views, runtime sequence, trust boundaries |
-| [acceptance.md](signoff/acceptance.md) | What was verified (A-01…A-24), what was not (N-01…N-11), and the conditions (C-01…C-10) |
+| [acceptance.md](signoff/acceptance.md) | What was verified (A-01…A-25), what was not (N-01…N-11), and the conditions (C-01…C-10) |
 | [threat-model.md](signoff/threat-model.md) | What can go wrong, by asset, actor and entry point |
 | [risks.md](signoff/risks.md) | Which risks are accepted, with anchors into the code |
 | [operations.md](signoff/operations.md) | How it runs: SLOs, alerts, runbooks, backups |
@@ -713,7 +746,7 @@ config/bench.yaml                benchmark targets, concurrency levels and promp
 config/eval-gates.yaml           release floors and drift allowances
 config/cost.yaml                 ownership assumptions: capex, power, utilisation, workload
 config/release.yaml              release identity: model pin, images, adapters, gate, evidence
-config/capacity.yaml             GPU scaling bounds, trigger queries/thresholds, prerequisites
+config/capacity.yaml             pool registry: compute/deployment, endpoints, bounds, triggers, node contract
 config/tenants.example.yaml      tenant keys, quotas, region, data class; tenants.yaml is gitignored
 scripts/smoke.py                 GPU tier smoke test
 scripts/smoke_gateway.py         end-to-end test through the gateway, all tiers
@@ -735,6 +768,7 @@ deploy/kustomize/                base, openshift/vanilla/airgap overlays, shared
 deploy/openshift/airgap/         IDMS/ITMS, mirrored image list and mirror script
 deploy/policies/                 Kyverno ClusterPolicies enforced at admission
 deploy/gitops/                   Argo CD project, app-of-apps and child Applications
+deploy/cloud/                    EKS/AKS/GKE/on-prem node-pool contracts (applied by the cluster owner)
 release/                         signed release manifest, detached signature and public key
 tools/validate_deploy.py         static checks over the rendered overlays
 tools/validate_release.py        release chain: manifest = overlays = compose, signature

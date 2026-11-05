@@ -4,6 +4,11 @@
 #
 # region and data_class are policy inputs, not metadata: the router will not
 # place a tenant's traffic on a backend that cannot legally serve it.
+#
+# Three optional allowlists narrow placement further, and all veto before
+# scoring: allowed_tiers (gpu, cpu, cloud), allowed_compute (gpu, cpu) and
+# allowed_deployment (onprem, cloud). A tenant that may use any GPU but never a
+# cloud endpoint sets allowed_compute: [gpu] and allowed_deployment: [onprem].
 tenants:
   - id: acme
     api_key: dev-acme-key

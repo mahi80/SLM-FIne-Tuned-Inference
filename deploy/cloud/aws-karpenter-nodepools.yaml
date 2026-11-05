@@ -1,0 +1,117 @@
+# Node capacity for the GPU and CPU pools on EKS.
+#
+# These objects are not part of the Kustomize tree or the Argo Application: they
+# describe the machines the application is allowed to land on, and are applied
+# by whoever owns the cluster.
+#
+#   kubectl apply -f deploy/cloud/aws-karpenter-nodepools.yaml
+#
+# Requires Karpenter and the NVIDIA GPU Operator. Karpenter creates the nodes;
+# the operator installs the driver, device plugin and node-feature-discovery,
+# which is what advertises nvidia.com/gpu as a schedulable resource.
+#
+# Replace the discovery tags and the node role with the values from your
+# cluster. `role` must be the one Karpenter's controller policy allows it to
+# pass to EC2.
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: slm-gpu
+spec:
+  template:
+    metadata:
+      labels:
+        nvidia.com/gpu.present: "true"
+        slm.fabric/pool: gpu
+    spec:
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: slm
+      requirements:
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["on-demand"]
+        - key: karpenter.k8s.aws/instance-family
+          operator: In
+          values: ["g5", "g6"]
+        - key: karpenter.k8s.aws/instance-size
+          operator: In
+          values: ["2xlarge", "4xlarge"]
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["amd64"]
+      # Matches the toleration the vLLM Deployment already carries, so simulators
+      # cannot be scheduled onto a GPU node.
+      taints:
+        - key: nvidia.com/gpu
+          value: present
+          effect: NoSchedule
+      # Inference nodes hold cached weights; recycle them on a schedule rather
+      # than letting a drifted AMI live for the life of the cluster.
+      expireAfter: 720h
+  limits:
+    nvidia.com/gpu: "4"
+  disruption:
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 10m
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: slm-cpu
+spec:
+  template:
+    metadata:
+      labels:
+        slm.fabric/pool: cpu
+    spec:
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: slm
+      requirements:
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["spot", "on-demand"]
+        - key: karpenter.k8s.aws/instance-family
+          operator: In
+          values: ["m6i", "m7i", "c7i"]
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["amd64"]
+      taints:
+        - key: slm.fabric/pool
+          value: cpu
+          effect: NoSchedule
+      expireAfter: 720h
+  limits:
+    cpu: "64"
+  disruption:
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 5m
+---
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: slm
+spec:
+  # Karpenter resolves the accelerated (nvidia) AL2023 variant for instance
+  # types with GPUs and the standard image for the rest.
+  amiFamily: AL2023
+  role: KarpenterNodeRole-slm-fabric
+  subnetSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: slm-fabric
+  securityGroupSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: slm-fabric
+  blockDeviceMappings:
+    - deviceName: /dev/xvda
+      ebs:
+        volumeSize: 120Gi
+        volumeType: gp3
+        encrypted: true
+  metadataOptions:
+    httpEndpoint: enabled
+    httpTokens: required

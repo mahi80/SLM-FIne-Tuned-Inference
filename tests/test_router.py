@@ -34,7 +34,9 @@ aliases:
       max_tokens: 8
     candidates:
       - name: gpu
-        tier: gpu
+        compute: gpu
+        deployment: onprem
+        pool: gpu-pool
         backend: http://gpu:8000
         upstream_model: model-gpu
         serves_regions: [eu, us]
@@ -42,7 +44,9 @@ aliases:
         priority: 0
         max_context: 100
       - name: cpu
-        tier: cpu
+        compute: cpu
+        deployment: onprem
+        pool: cpu-pool
         backend: http://cpu:8001
         upstream_model: model-cpu
         serves_regions: [eu, us]
@@ -50,7 +54,9 @@ aliases:
         priority: 10
         max_context: 50
       - name: cloud
-        tier: cloud
+        compute: gpu
+        deployment: cloud
+        pool: cloud-pool
         backend: http://cloud:8001
         upstream_model: model-cloud
         serves_regions: [us]
@@ -61,7 +67,9 @@ aliases:
     primary: gpu
     candidates:
       - name: gpu
-        tier: gpu
+        compute: gpu
+        deployment: onprem
+        pool: gpu-pool
         backend: http://gpu:8000
         upstream_model: model-gpu
         serves_regions: [eu, us]
@@ -69,7 +77,9 @@ aliases:
         priority: 0
         max_context: 100
       - name: cpu
-        tier: cpu
+        compute: cpu
+        deployment: onprem
+        pool: cpu-pool
         backend: http://cpu:8001
         upstream_model: model-cpu
         serves_regions: [eu, us]
@@ -77,7 +87,9 @@ aliases:
         priority: 10
         max_context: 50
       - name: cloud
-        tier: cloud
+        compute: gpu
+        deployment: cloud
+        pool: cloud-pool
         backend: http://cloud:8001
         upstream_model: model-cloud
         serves_regions: [us]
@@ -88,7 +100,9 @@ aliases:
     primary: gpu
     candidates:
       - name: gpu
-        tier: gpu
+        compute: gpu
+        deployment: onprem
+        pool: gpu-pool
         backend: http://gpu:8000
         upstream_model: model-gpu
         serves_regions: [eu, us]
@@ -111,6 +125,8 @@ def tenant(**overrides):
         "data_class": "confidential",
         "allowed_aliases": (),
         "allowed_tiers": (),
+        "allowed_compute": (),
+        "allowed_deployment": (),
         "allow_cloud": True,
     }
     values.update(overrides)
@@ -145,6 +161,21 @@ class PolicyLoadingTest(Workspace):
 
     def test_unknown_candidate_key_is_rejected(self) -> None:
         bad = POLICY.replace("max_context: 100", "max_contextt: 100", 1)
+        with self.assertRaises(ValueError):
+            load_policy(str(self.policy_file(bad)))
+
+    def test_unknown_compute_type_is_rejected(self) -> None:
+        bad = POLICY.replace("compute: gpu", "compute: tpu", 1)
+        with self.assertRaises(ValueError):
+            load_policy(str(self.policy_file(bad)))
+
+    def test_candidate_must_name_a_pool(self) -> None:
+        bad = POLICY.replace("        pool: gpu-pool\n", "", 1)
+        with self.assertRaises(ValueError):
+            load_policy(str(self.policy_file(bad)))
+
+    def test_tier_is_derived_not_declared(self) -> None:
+        bad = POLICY.replace("        pool: gpu-pool\n", "        pool: gpu-pool\n        tier: gpu\n", 1)
         with self.assertRaises(ValueError):
             load_policy(str(self.policy_file(bad)))
 
@@ -219,6 +250,30 @@ class AdmissionTest(Workspace):
             "fleet", tenant(allowed_tiers=("cpu",)), "req-1", 10
         )
         self.assertEqual(decision.chosen.name, "cpu")
+
+    def test_tenant_compute_allowlist_is_enforced(self) -> None:
+        engine, _ = self.engine()
+        decision = engine.decide(
+            "fleet", tenant(allowed_compute=("cpu",)), "req-1", 10
+        )
+        self.assertEqual(decision.chosen.name, "cpu")
+        reasons = {item.candidate: item.reason for item in decision.considered}
+        self.assertEqual(reasons["gpu"], "compute-denied")
+
+    def test_gpu_onprem_only_tenant_rejects_the_cloud_gpu(self) -> None:
+        engine, _ = self.engine()
+        for _ in range(2):
+            engine.breakers.record_failure(key("fleet", "gpu"))
+        scoped = tenant(
+            region="us",
+            allowed_compute=("gpu",),
+            allowed_deployment=("onprem",),
+        )
+        decision = engine.decide("fleet", scoped, "req-1", 10)
+        self.assertIsNone(decision.chosen)
+        reasons = {item.candidate: item.reason for item in decision.considered}
+        self.assertEqual(reasons["cloud"], "deployment-denied")
+        self.assertEqual(reasons["cpu"], "compute-denied")
 
 
 class CanaryTest(Workspace):

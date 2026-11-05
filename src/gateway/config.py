@@ -7,7 +7,7 @@ from pathlib import Path
 
 import yaml
 
-from router.policy import DATA_CLASSES, TIERS
+from router.policy import COMPUTE, DATA_CLASSES, DEPLOYMENTS, TIERS
 
 TENANT_KEYS = {
     "id",
@@ -17,6 +17,8 @@ TENANT_KEYS = {
     "data_class",
     "allowed_aliases",
     "allowed_tiers",
+    "allowed_compute",
+    "allowed_deployment",
     "allow_cloud",
     "admin",
 }
@@ -31,6 +33,8 @@ class Tenant:
     data_class: str = "internal"
     allowed_aliases: tuple[str, ...] = ()
     allowed_tiers: tuple[str, ...] = ()
+    allowed_compute: tuple[str, ...] = ()
+    allowed_deployment: tuple[str, ...] = ()
     allow_cloud: bool = False
     admin: bool = False
 
@@ -71,6 +75,22 @@ def load_tenants(path: str) -> list[Tenant]:
         unknown_tiers = set(allowed_tiers) - TIERS
         if unknown_tiers:
             raise ValueError(f"tenant '{tenant_id}': unknown tiers {sorted(unknown_tiers)}")
+        allowed_compute = _string_list(
+            item.get("allowed_compute"), "allowed_compute", tenant_id
+        )
+        unknown_compute = set(allowed_compute) - COMPUTE
+        if unknown_compute:
+            raise ValueError(
+                f"tenant '{tenant_id}': unknown compute types {sorted(unknown_compute)}"
+            )
+        allowed_deployment = _string_list(
+            item.get("allowed_deployment"), "allowed_deployment", tenant_id
+        )
+        unknown_deployment = set(allowed_deployment) - DEPLOYMENTS
+        if unknown_deployment:
+            raise ValueError(
+                f"tenant '{tenant_id}': unknown deployments {sorted(unknown_deployment)}"
+            )
         tenants.append(
             Tenant(
                 id=tenant_id,
@@ -82,6 +102,8 @@ def load_tenants(path: str) -> list[Tenant]:
                     item.get("allowed_aliases"), "allowed_aliases", tenant_id
                 ),
                 allowed_tiers=allowed_tiers,
+                allowed_compute=allowed_compute,
+                allowed_deployment=allowed_deployment,
                 allow_cloud=bool(item.get("allow_cloud", False)),
                 admin=bool(item.get("admin", False)),
             )

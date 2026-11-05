@@ -17,6 +17,9 @@ What it protects, in order of how expensive the mistake is:
     tainted CPU pool, so simulators cannot consume GPU capacity;
   * the five platform alerts exist on every overlay that installs the
     Prometheus Operator, each with a window and a severity;
+  * every policy candidate names a pool that config/capacity.yaml declares,
+    and its compute, deployment and backend match that pool, so the router
+    cannot route to capacity nobody has described;
   * the GPU scaler matches config/capacity.yaml, keeps a warm floor, shares an
     RWX claim and preloads every declared adapter — and never scales the
     gateway, whose quota, breaker and audit state is in-process.
@@ -478,128 +481,198 @@ def check_alerts(docs: list[dict]) -> list[str]:
 
 CAPACITY_PATH = REPO / "config/capacity.yaml"
 SCALER_KINDS = {"ScaledObject", "HorizontalPodAutoscaler"}
-SHARED_CLAIMS = ("slm-model-cache", "slm-adapters")
+COMPUTE_TYPES = {"gpu", "cpu"}
+DEPLOYMENT_TYPES = {"onprem", "cloud"}
+AUTOSCALERS = {"external", "none"}
 
 
 def load_capacity(path: Path = CAPACITY_PATH) -> dict:
-    """The scaling bounds live in config/capacity.yaml so the deployment, the
-    scaling controller and this validator cannot disagree about them."""
+    """The pool registry lives in config/capacity.yaml so the router's policy,
+    the scaling controllers and this validator cannot disagree about where work
+    may run or how far each pool may grow."""
     data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
-    gpu = data.get("gpu") or {}
-    try:
-        bounds = (int(gpu["min_replicas"]), int(gpu["max_replicas"]))
-        workload = str(gpu["workload"])
-        metrics = list(gpu["metrics"])
-    except (KeyError, TypeError, ValueError) as exc:
-        raise RuntimeError(f"{path} does not declare GPU replica bounds and metrics") from exc
-    if not workload or not metrics:
-        raise RuntimeError(f"{path} does not declare a GPU workload and at least one metric")
-    return {"workload": workload, "min_replicas": bounds[0], "max_replicas": bounds[1],
-            "metrics": metrics}
+    raw_pools = data.get("pools")
+    if not isinstance(raw_pools, list) or not raw_pools:
+        raise RuntimeError(f"{path} declares no pools")
+    pools: dict[str, dict] = {}
+    for index, raw in enumerate(raw_pools):
+        where = f"{path}: pools[{index}]"
+        if not isinstance(raw, dict):
+            raise RuntimeError(f"{where} must be a mapping")
+        name = str(raw.get("name") or "").strip()
+        if not name:
+            raise RuntimeError(f"{where} has no name")
+        if name in pools:
+            raise RuntimeError(f"{path}: duplicate pool {name!r}")
+        compute = str(raw.get("compute") or "")
+        if compute not in COMPUTE_TYPES:
+            raise RuntimeError(f"{where}: compute must be one of {sorted(COMPUTE_TYPES)}")
+        deployment = str(raw.get("deployment") or "")
+        if deployment not in DEPLOYMENT_TYPES:
+            raise RuntimeError(f"{where}: deployment must be one of {sorted(DEPLOYMENT_TYPES)}")
+        replicas = raw.get("replicas") or {}
+        try:
+            minimum, maximum = int(replicas["min"]), int(replicas["max"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError(f"{where} does not declare replicas.min and replicas.max") from exc
+        if minimum < 0 or maximum < minimum:
+            raise RuntimeError(f"{where}: replicas must satisfy 0 <= min <= max")
+        endpoint = str(raw.get("endpoint") or "").rstrip("/")
+        if not endpoint.startswith(("http://", "https://")):
+            raise RuntimeError(f"{where}: endpoint must be an http(s) URL")
+        workload = str(raw.get("workload") or "").strip()
+        if not workload:
+            raise RuntimeError(f"{where} has no workload")
+        metrics = raw.get("metrics") or []
+        if not isinstance(metrics, list):
+            raise RuntimeError(f"{where}: metrics must be a list")
+        node_pool = raw.get("node_pool") or {}
+        if not isinstance(node_pool, dict) or not str(node_pool.get("label") or "").strip():
+            raise RuntimeError(f"{where} has no node_pool.label")
+        if str(node_pool.get("autoscaler") or "") not in AUTOSCALERS:
+            raise RuntimeError(f"{where}: node_pool.autoscaler must be one of {sorted(AUTOSCALERS)}")
+        pools[name] = {
+            "name": name,
+            "compute": compute,
+            "deployment": deployment,
+            "provider": str(raw.get("provider") or ""),
+            "modelled": bool(raw.get("modelled", False)),
+            "endpoint": endpoint,
+            "workload": workload,
+            "min_replicas": minimum,
+            "max_replicas": maximum,
+            "metrics": metrics,
+            "prerequisites": raw.get("prerequisites") or {},
+            "node_pool": node_pool,
+        }
+    return {"version": data.get("version"), "pools": pools}
+
+
+def check_pools(capacity: dict, policy_path: Path) -> list[str]:
+    """A candidate is only routable if its pool is declared and the two agree.
+
+    The candidate states compute and deployment because admission reasons about
+    them; the pool states where the work actually lands. If those two drift, a
+    policy review approves a route nobody deployed — or forbids one that exists.
+    """
+    errors = []
+    policy = yaml.safe_load(Path(policy_path).read_text(encoding="utf-8")) or {}
+    pools = capacity["pools"]
+    for alias, body in (policy.get("aliases") or {}).items():
+        for raw in (body or {}).get("candidates") or []:
+            if not isinstance(raw, dict):
+                continue
+            where = f"alias {alias} candidate {raw.get('name')}"
+            name = str(raw.get("pool") or "")
+            pool = pools.get(name)
+            if pool is None:
+                errors.append(
+                    f"{where} names pool {name!r}, which config/capacity.yaml does not declare"
+                )
+                continue
+            if str(raw.get("compute")) != pool["compute"]:
+                errors.append(
+                    f"{where} declares compute {raw.get('compute')!r}, "
+                    f"pool {name} is {pool['compute']!r}"
+                )
+            if str(raw.get("deployment")) != pool["deployment"]:
+                errors.append(
+                    f"{where} declares deployment {raw.get('deployment')!r}, "
+                    f"pool {name} is {pool['deployment']!r}"
+                )
+            backend = str(raw.get("backend") or "").rstrip("/")
+            if backend != pool["endpoint"]:
+                errors.append(
+                    f"{where} points at {backend!r}, pool {name} endpoint is {pool['endpoint']!r}"
+                )
+    return errors
 
 
 def _norm(text) -> str:
     return " ".join(str(text or "").split())
 
 
-def check_autoscaling(docs: list[dict], capacity: dict) -> list[str]:
-    """Scaling is the one place where a manifest can be valid YAML and still
-    take the platform down: a scaler on the gateway replicates in-process state,
-    a GPU floor of zero turns a warm tier cold, a shared claim that is not RWX
-    deadlocks the second replica, and a replica without preloaded adapters
-    answers alias traffic with a 404.
-    """
+def _check_scaled_object(scaled_object: dict, pool: dict, docs: list[dict]) -> list[str]:
     errors = []
-    workload = capacity["workload"]
-    minimum = capacity["min_replicas"]
-    maximum = capacity["max_replicas"]
-    if minimum < 1:
-        errors.append(f"config/capacity.yaml allows {workload} to scale to zero; the GPU tier keeps a warm floor")
-    if maximum < minimum:
-        errors.append(f"config/capacity.yaml has max_replicas {maximum} below min_replicas {minimum}")
-
-    scalers = [doc for doc in docs if doc.get("kind") in SCALER_KINDS]
-    for scaler in scalers:
-        if ((scaler.get("spec") or {}).get("scaleTargetRef") or {}).get("name") == "gateway":
-            errors.append(
-                f"{label(scaler)} scales the gateway; its quota, breaker and audit state "
-                "is in-process and cannot be replicated"
-            )
-
-    scaled_object = find(docs, "ScaledObject", workload)
-    if scaled_object is None:
-        return errors
-
+    workload = pool["workload"]
+    name = f"ScaledObject/{workload}"
     spec = scaled_object.get("spec") or {}
     target = spec.get("scaleTargetRef") or {}
     deployment = find(docs, "Deployment", workload)
     if target.get("kind") != "Deployment" or target.get("name") != workload:
         errors.append(
-            f"ScaledObject/{workload} targets {target.get('kind')}/{target.get('name')}, "
+            f"{name} targets {target.get('kind')}/{target.get('name')}, "
             f"expected Deployment/{workload}"
         )
-    if spec.get("minReplicaCount") != minimum:
+    if spec.get("minReplicaCount") != pool["min_replicas"]:
         errors.append(
-            f"ScaledObject/{workload} minReplicaCount is {spec.get('minReplicaCount')}, "
-            f"config/capacity.yaml says {minimum}"
+            f"{name} minReplicaCount is {spec.get('minReplicaCount')}, "
+            f"pool {pool['name']} says {pool['min_replicas']}"
         )
-    if spec.get("maxReplicaCount") != maximum:
+    if spec.get("maxReplicaCount") != pool["max_replicas"]:
         errors.append(
-            f"ScaledObject/{workload} maxReplicaCount is {spec.get('maxReplicaCount')}, "
-            f"config/capacity.yaml says {maximum}"
+            f"{name} maxReplicaCount is {spec.get('maxReplicaCount')}, "
+            f"pool {pool['name']} says {pool['max_replicas']}"
         )
     if deployment is not None and "replicas" in (deployment.get("spec") or {}):
         errors.append(
             f"Deployment/{workload} pins spec.replicas while a ScaledObject owns it; "
             "Argo selfHeal would undo every scale event"
         )
+    if not pool["metrics"]:
+        errors.append(f"{name} scales a pool that declares no metric in config/capacity.yaml")
 
     triggers = {
         str((trigger.get("metadata") or {}).get("metricName")): trigger
         for trigger in spec.get("triggers") or []
     }
-    for metric in capacity["metrics"]:
-        name = str(metric.get("name"))
+    for metric in pool["metrics"]:
+        metric_name = str(metric.get("name"))
         trigger = triggers.get(str(metric.get("keda_metric")))
         if trigger is None:
-            errors.append(f"ScaledObject/{workload} has no {name} trigger")
+            errors.append(f"{name} has no {metric_name} trigger")
             continue
         if trigger.get("type") != "prometheus":
-            errors.append(f"ScaledObject/{workload} trigger {name} is {trigger.get('type')!r}, expected prometheus")
+            errors.append(
+                f"{name} trigger {metric_name} is {trigger.get('type')!r}, expected prometheus"
+            )
         metadata = trigger.get("metadata") or {}
         if metadata.get("metricName") != metric.get("keda_metric"):
             errors.append(
-                f"ScaledObject/{workload} trigger {name} publishes {metadata.get('metricName')!r}, "
+                f"{name} trigger {metric_name} publishes {metadata.get('metricName')!r}, "
                 f"expected {metric.get('keda_metric')!r}"
             )
         if _norm(metadata.get("query")) != _norm(metric.get("query")):
-            errors.append(f"ScaledObject/{workload} trigger {name} query differs from config/capacity.yaml")
+            errors.append(f"{name} trigger {metric_name} query differs from config/capacity.yaml")
         if str(metadata.get("threshold")) != str(metric.get("threshold")):
             errors.append(
-                f"ScaledObject/{workload} trigger {name} threshold is {metadata.get('threshold')}, "
+                f"{name} trigger {metric_name} threshold is {metadata.get('threshold')}, "
                 f"config/capacity.yaml says {metric.get('threshold')}"
             )
         if str(metadata.get("serverAddress") or "").startswith("https://") and not trigger.get(
             "authenticationRef"
         ):
             errors.append(
-                f"ScaledObject/{workload} trigger {name} queries HTTPS without authenticationRef"
+                f"{name} trigger {metric_name} queries HTTPS without authenticationRef"
             )
 
-    if maximum > 1:
-        for claim in SHARED_CLAIMS:
+    if deployment is not None and pool["max_replicas"] > 1:
+        for volume in pod_spec(deployment).get("volumes") or []:
+            claim = (volume.get("persistentVolumeClaim") or {}).get("claimName")
+            if not claim:
+                continue
             pvc = find(docs, "PersistentVolumeClaim", claim)
             if pvc is None:
                 continue
             modes = (pvc.get("spec") or {}).get("accessModes") or []
             if "ReadWriteMany" not in modes:
                 errors.append(
-                    f"PersistentVolumeClaim/{claim} is {modes}; {maximum} {workload} replicas "
-                    "need ReadWriteMany to land on more than one node"
+                    f"PersistentVolumeClaim/{claim} is {modes}; {pool['max_replicas']} "
+                    f"{workload} replicas need ReadWriteMany to land on more than one node"
                 )
 
     adapter_set = find(docs, "ConfigMap", "slm-adapter-set")
-    if adapter_set is not None and deployment is not None:
+    if deployment is not None and pool["prerequisites"].get("preload_adapters") and adapter_set:
         declared = [
             line.strip()
             for line in str((adapter_set.get("data") or {}).get("adapters.txt", "")).splitlines()
@@ -617,12 +690,59 @@ def check_autoscaling(docs: list[dict], capacity: dict) -> list[str]:
                 if item.startswith("--"):
                     break
                 preloaded.append(item)
-            missing = [name for name in declared if f"{name}=/adapters/{name}" not in preloaded]
+            missing = [item for item in declared if f"{item}=/adapters/{item}" not in preloaded]
             if missing:
                 errors.append(
                     f"Deployment/{workload} preloads {', '.join(missing)} not at "
                     f"/adapters/<name>; slm-adapter-set declares {', '.join(declared)}"
                 )
+    return errors
+
+
+def check_autoscaling(docs: list[dict], capacity: dict) -> list[str]:
+    """Scaling is the one place where a manifest can be valid YAML and still
+    take the platform down: a scaler on the gateway replicates in-process state,
+    a GPU floor of zero turns a warm tier cold, a shared claim that is not RWX
+    deadlocks the second replica, and a replica without preloaded adapters
+    answers alias traffic with a 404.
+    """
+    errors = []
+    pools = capacity["pools"]
+    for pool in pools.values():
+        if pool["compute"] == "gpu" and pool["deployment"] == "onprem" and pool["min_replicas"] < 1:
+            errors.append(
+                f"pool {pool['name']} allows GPU replicas to reach zero; "
+                "the on-prem tier keeps a warm floor"
+            )
+        if pool["max_replicas"] > 1 and not pool["metrics"]:
+            errors.append(
+                f"pool {pool['name']} allows {pool['max_replicas']} replicas "
+                "but declares no scaling metric"
+            )
+
+    by_workload = {pool["workload"]: pool for pool in pools.values()}
+    for scaler in (doc for doc in docs if doc.get("kind") in SCALER_KINDS):
+        target = (scaler.get("spec") or {}).get("scaleTargetRef") or {}
+        if target.get("name") == "gateway":
+            errors.append(
+                f"{label(scaler)} scales the gateway; its quota, breaker and audit state "
+                "is in-process and cannot be replicated"
+            )
+            continue
+        if scaler.get("kind") != "ScaledObject":
+            errors.append(
+                f"{label(scaler)} is a HorizontalPodAutoscaler; tiers scale through a "
+                "ScaledObject so the policy stays in config/capacity.yaml"
+            )
+            continue
+        pool = by_workload.get(str(target.get("name")))
+        if pool is None:
+            errors.append(
+                f"{label(scaler)} targets {target.get('name')!r}, "
+                "which is not the workload of a declared pool"
+            )
+            continue
+        errors.extend(_check_scaled_object(scaler, pool, docs))
     return errors
 
 
@@ -693,6 +813,7 @@ def check_overlay(overlay: str, docs: list[dict]) -> list[str]:
 
 
 def validate(docs: list[dict], overlay: str, policy_path: Path, capacity: dict | None = None) -> list[str]:
+    capacity = capacity if capacity is not None else load_capacity()
     return [
         *check_images(docs),
         *check_model_pin(docs),
@@ -702,11 +823,12 @@ def validate(docs: list[dict], overlay: str, policy_path: Path, capacity: dict |
         *check_mounts(docs),
         *check_placement(docs),
         *check_services(docs),
+        *check_pools(capacity, policy_path),
         *check_policy_binding(docs, policy_path),
         *check_gateway_state(docs),
         *check_no_secrets(docs),
         *check_namespaces(docs),
-        *check_autoscaling(docs, capacity if capacity is not None else load_capacity()),
+        *check_autoscaling(docs, capacity),
         *check_overlay(overlay, docs),
     ]
 

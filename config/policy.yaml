@@ -4,6 +4,12 @@
 # Admission runs before scoring. A candidate that fails a tenant, residency or
 # data-class rule is not a fallback, it is not a route.
 #
+# A candidate names a pool from config/capacity.yaml, and states the two axes
+# that policy reasons about: `compute` (gpu|cpu) and `deployment`
+# (onprem|cloud). The client-facing tier is derived, not stored: a cloud
+# deployment is `cloud`, anything on-prem is named by its compute. That is what
+# lets a tenant allow GPUs while forbidding the perimeter to be left.
+#
 # GPU costs are 0.0 because the node is owned; CPU and cloud figures come from
 # the calibrated profiles in src/tiersim/profiles.py and are MODELLED.
 version: "2026-11-04.1"
@@ -19,7 +25,9 @@ aliases:
     primary: gpu
     candidates:
       - name: gpu
-        tier: gpu
+        compute: gpu
+        deployment: onprem
+        pool: onprem-gpu
         backend: http://vllm-gpu:8000
         upstream_model: slm-small
         region: onprem
@@ -31,7 +39,9 @@ aliases:
         model_version: qwen3-4b-awq-2026-02
 
       - name: cpu
-        tier: cpu
+        compute: cpu
+        deployment: onprem
+        pool: onprem-cpu
         backend: http://tiersim-cpu:8001
         upstream_model: slm-small
         region: onprem
@@ -43,7 +53,9 @@ aliases:
         model_version: qwen3-4b-q4-cpu
 
       - name: cloud-us
-        tier: cloud
+        compute: gpu
+        deployment: cloud
+        pool: cloud-burst
         backend: http://tiersim-cloud:8001
         upstream_model: slm-small
         region: us-east
@@ -60,7 +72,9 @@ aliases:
     primary: cpu
     candidates:
       - name: cpu
-        tier: cpu
+        compute: cpu
+        deployment: onprem
+        pool: onprem-cpu
         backend: http://tiersim-cpu:8001
         upstream_model: slm-small
         region: onprem
@@ -87,7 +101,9 @@ aliases:
       max_tokens: 64
     candidates:
       - name: v1
-        tier: gpu
+        compute: gpu
+        deployment: onprem
+        pool: onprem-gpu
         backend: http://vllm-gpu:8000
         upstream_model: triage-v1
         region: onprem
@@ -99,7 +115,9 @@ aliases:
         model_version: triage-v1
 
       - name: v2
-        tier: gpu
+        compute: gpu
+        deployment: onprem
+        pool: onprem-gpu
         backend: http://vllm-gpu:8000
         upstream_model: triage-v2
         region: onprem
@@ -116,7 +134,9 @@ aliases:
     primary: v2
     candidates:
       - name: v2
-        tier: gpu
+        compute: gpu
+        deployment: onprem
+        pool: onprem-gpu
         backend: http://vllm-gpu:8000
         upstream_model: triage-v2
         region: onprem

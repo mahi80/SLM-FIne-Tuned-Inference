@@ -30,6 +30,8 @@ class TenantView(Protocol):
     data_class: str
     allowed_aliases: tuple[str, ...]
     allowed_tiers: tuple[str, ...]
+    allowed_compute: tuple[str, ...]
+    allowed_deployment: tuple[str, ...]
     allow_cloud: bool
 
 
@@ -61,6 +63,7 @@ class Decision:
             "decision": self.kind,
             "chosen": self.chosen.name if self.chosen else None,
             "tier": self.chosen.tier if self.chosen else None,
+            "pool": self.chosen.pool if self.chosen else None,
             "attempts": [candidate.name for candidate in self.attempts],
             "canary": {
                 "percent": self.canary_percent,
@@ -99,7 +102,11 @@ class PolicyEngine:
     ) -> tuple[bool, str]:
         if tenant.allowed_tiers and candidate.tier not in tenant.allowed_tiers:
             return False, "tier-denied"
-        if candidate.tier == "cloud" and not tenant.allow_cloud:
+        if tenant.allowed_compute and candidate.compute not in tenant.allowed_compute:
+            return False, "compute-denied"
+        if tenant.allowed_deployment and candidate.deployment not in tenant.allowed_deployment:
+            return False, "deployment-denied"
+        if candidate.deployment == "cloud" and not tenant.allow_cloud:
             return False, "cloud-denied"
         if "*" not in candidate.serves_regions and tenant.region not in candidate.serves_regions:
             return False, "region-veto"
