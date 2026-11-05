@@ -31,6 +31,7 @@ from registry.manifest import (
 REPO = Path(__file__).resolve().parent.parent
 ARTIFACTS = (
     "config/policy.yaml",
+    "config/capacity.yaml",
     "config/release.yaml",
     "config/eval-gates.yaml",
     "config/cost.yaml",
