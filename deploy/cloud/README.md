@@ -54,10 +54,14 @@ For a cloud provider's managed endpoint the pool is *external*: it has no
 Deployment, Service or node pool in this cluster. Steps 1–4 still describe the
 provider's node pool, but the registry entry and the route look different:
 
-1. Record the pool with `external: true`, an `https` endpoint, and **no**
-   `workload` or `node_pool` — the validator rejects either.
+1. Record the pool with `external: true`, an `https` endpoint, an `slo` block
+   (`expected_latency_ms`, `cost_per_1k_out`, `cost_source`) and **no**
+   `workload` or `node_pool` — the validator rejects either. Replica bounds are
+   optional and normally omitted: the provider scales.
 2. Give the candidate an `access` block that names a key, never the key itself:
-   `access: {key: external-prod}`.
+   `access: {key: external-prod}`. The candidate also restates the pool's
+   `latency_ms` and `cost_per_1k_out`; the validator fails a drift rather than
+   admitting on a stale figure.
 3. Create `Secret/slm-backend-keys` out of band in `slm-fabric` with
    `keys: {external-prod: …}`. It is mounted optionally at
    `/app/backend-keys`; a missing entry vetoes the candidate as

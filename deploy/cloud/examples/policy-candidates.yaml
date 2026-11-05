@@ -31,6 +31,7 @@ aliases:
         sovereign: false
         max_context: 32768
         cost_per_1k_out: 0.0006
+        latency_ms: 1200              # = pool cloud-prod slo.expected_latency_ms
         access:
           key: external-prod          # entry in Secret/slm-backend-keys
           header: authorization       # default
@@ -51,6 +52,7 @@ aliases:
         sovereign: false
         max_context: 16384
         cost_per_1k_out: 0.0009
+        latency_ms: 900               # = pool cloud-gpu-vllm slo.expected_latency_ms
         access:
           source: file
           key: provider-token         # /app/backend-tokens/provider-token
@@ -75,6 +77,7 @@ aliases:
         sovereign: false
         max_context: 32768
         cost_per_1k_out: 0.0006
+        latency_ms: 1200              # = pool cloud-prod slo.expected_latency_ms
         access:
           source: oidc
           key: provider-oidc          # client secret in Secret/slm-backend-keys

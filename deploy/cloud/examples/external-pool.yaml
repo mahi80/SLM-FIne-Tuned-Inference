@@ -3,11 +3,16 @@
 # The pool side of an external backend: a place work may land that this cluster
 # does not own. Copy the entry into config/capacity.yaml and replace the
 # endpoint with the provider's own. The validator rejects an external pool that
-# keeps a `workload`, a `node_pool`, an http:// endpoint or replica bounds, and
-# it rejects a candidate that names this pool without an `access` block.
+# keeps a `workload`, a `node_pool` or an http:// endpoint, and it rejects a
+# candidate that names this pool without an `access` block. Replica bounds are
+# optional: omitted means the provider scales and nothing is counted here.
+#
+# Every pool also declares the SLO admission is checked against. These figures
+# are modelled until a real provider is measured — replace them with the
+# provider's published latency and an invoice-backed price.
 #
 # Pairs with policy-candidates.yaml in this directory.
-version: 2
+version: 3
 
 pools:
   - name: cloud-prod
@@ -21,8 +26,12 @@ pools:
     # https only, no userinfo, no query, no fragment. A path prefix is fine:
     # the gateway appends /v1/chat/completions and /health.
     endpoint: https://inference.provider.example
-    # No workload, no node_pool, no replicas: the machines are not ours.
+    # No workload, no node_pool: the machines are not ours.
     metrics: []
+    slo:
+      expected_latency_ms: 1200
+      cost_per_1k_out: 0.0006
+      cost_source: modelled
 
   - name: cloud-gpu-vllm
     compute: gpu
@@ -32,3 +41,7 @@ pools:
     modelled: false
     endpoint: https://vllm.internal.example.com
     metrics: []
+    slo:
+      expected_latency_ms: 900
+      cost_per_1k_out: 0.0009
+      cost_source: modelled
