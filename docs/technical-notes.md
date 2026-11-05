@@ -40,6 +40,7 @@ the distinction explicit:
 | Cloud burst tier (L4 profile) | **Modelled and wired** — a standby that residency usually excludes | `tiersim-cloud`, `x-simulated: true` |
 | External backend path (TLS, keyed by reference, egress rule, health probes) | **Implemented and unit tested** — no live provider was called | `src/gateway/backends.py`, `tests/test_backends.py`, [A-26](signoff/acceptance.md) |
 | OpenShift / vanilla / air-gap deployment | **Vanilla verified on kind; OpenShift and air gap static** — 25 objects applied, gateway and both simulators running | `deploy/kustomize`, `make deploy-validate`, [A-17](signoff/acceptance.md) |
+| Cloud cluster bring-up (EKS, AKS, GKE) | **Dry-run plans only** — every provider call is printed and statically checked, no account was contacted and no cluster exists | `deploy/cloud/`, `tests/test_cloud_bringup.py`, [A-30](signoff/acceptance.md) |
 | GitOps, release hooks and admission policy | **Admission and Argo verified on kind; hooks unrun** — Kyverno v1.19.2 denials and Argo v3.6.1 self-heal observed | `deploy/gitops`, `deploy/policies`, [A-20](signoff/acceptance.md), [A-21](signoff/acceptance.md) |
 | Signed release manifest (Ed25519, canonical JSON, drift checks) | **Measured** | `make release`, `make release-check`, `release/slm-0.5.0.json` |
 | Image supply (first-party build → GHCR → digest pin) | **Measured (hosted CI + registry)** — images run `41935648483` published three public packages; all four workload images render as `@sha256:`; no cluster pulled them yet | `.github/workflows/images.yml`, [A-22](signoff/acceptance.md) |
@@ -92,7 +93,10 @@ kubectl apply -f deploy/gitops/argocd/app-of-apps.yaml
 
 Prerequisites are Argo CD, Kyverno, the NVIDIA GPU Operator, KEDA on the operator overlays
 (the `ScaledObject` CRD must exist), a `ReadWriteMany` storage class for the model and
-adapter claims, and either Prometheus Operator or OpenShift user-workload monitoring. Seed
+adapter claims, and either Prometheus Operator or OpenShift user-workload monitoring.
+`deploy/cloud/bootstrap-addons.sh` installs the first four with pinned chart versions on an
+existing cluster (`--dry-run` prints the plan); Argo CD's repository registration and the
+storage class stay yours. Seed
 the `slm-adapters` PVC from `make adapter-train` before the first sync; the loader hook
 declares `triage-v1`/`triage-v2` and fails the sync if either is absent. The root app syncs admission policy (`slm-policies`, wave 0) before
 the platform (`slm-platform`, wave 10); the platform's PostSync hooks then load the
@@ -253,6 +257,16 @@ pool up — Karpenter `NodePool`s for EKS, `az aks nodepool add`, `gcloud contai
 node-pools create`, and a label/taint script for on-prem OpenShift workers. Each applies the
 same `nvidia.com/gpu.present` label, `nvidia.com/gpu` taint and `slm.fabric/pool=cpu` CPU
 contract the manifests already select, and the tests parse them so a typo cannot drift.
+
+The same directory holds the bring-up scripts that create the cluster those pools attach to:
+`aws-eks-cluster.sh`, `azure-aks-cluster.sh` and `gcp-gke-cluster.sh` create the control
+plane and system pool, configure identity federation and the autoscaler, and then call the
+provider's node-pool snippet; `bootstrap-addons.sh` installs the GPU Operator, KEDA, Argo CD
+and Kyverno at pinned versions. Each has a `--dry-run` that prints every provider and Helm
+call with no CLI or credential present, and `tests/test_cloud_bringup.py` runs all four that
+way. Nothing was applied to an account: the scripts are a reviewed plan, not a provisioning
+history (A-30, N-14). The decision to ship scripts rather than Terraform is
+[ADR-0013](adr/ADR-0013-cluster-bring-up.md).
 
 Capability is not the same as a working route. The snippets buy machines; they do not make a
 cloud endpoint reachable. Stage 2 added the missing half — an external backend type with
@@ -1044,7 +1058,7 @@ deploy/kustomize/components/cloud-egress/  opt-in TCP 443 egress to one provider
 deploy/openshift/airgap/         IDMS/ITMS, mirrored image list and mirror script
 deploy/policies/                 Kyverno ClusterPolicies enforced at admission
 deploy/gitops/                   Argo CD project, app-of-apps and child Applications
-deploy/cloud/                    EKS/AKS/GKE/on-prem node-pool contracts (applied by the cluster owner)
+deploy/cloud/                    EKS/AKS/GKE bring-up scripts, node-pool contracts, add-on bootstrap
 release/                         signed release manifest, detached signature and public key
 tools/validate_deploy.py         static checks over the rendered overlays
 tools/validate_release.py        release chain: manifest = overlays = compose, signature

@@ -2,6 +2,7 @@
 # Create the GPU and CPU pools on an existing AKS cluster.
 #
 #   RESOURCE_GROUP=slm-rg CLUSTER=slm-fabric deploy/cloud/azure-aks-nodepools.sh
+#   RESOURCE_GROUP=slm-rg CLUSTER=slm-fabric deploy/cloud/azure-aks-nodepools.sh --dry-run
 #
 # The cluster autoscaler is enabled per pool, because AKS scales node pools
 # independently. `--gpu-driver none` leaves the driver to the NVIDIA GPU
@@ -13,11 +14,31 @@ RESOURCE_GROUP=${RESOURCE_GROUP:?set RESOURCE_GROUP to the cluster resource grou
 CLUSTER=${CLUSTER:?set CLUSTER to the AKS cluster name}
 GPU_VM_SIZE=${GPU_VM_SIZE:-Standard_NC24ads_A100_v4}
 CPU_VM_SIZE=${CPU_VM_SIZE:-Standard_D8ds_v5}
+DRY_RUN=0
+
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run) DRY_RUN=1 ;;
+    *)
+      echo "unknown argument: $arg" >&2
+      exit 2
+      ;;
+  esac
+done
+
+run() {
+  if [ "$DRY_RUN" = 1 ]; then
+    printf '+ %s
+' "$*"
+  else
+    "$@"
+  fi
+}
 
 # The taint matches the toleration in the vLLM Deployment; the label matches its
 # nodeSelector. Minimum one keeps a warm replica, maximum follows
 # config/capacity.yaml.
-az aks nodepool add \
+run az aks nodepool add \
   --resource-group "$RESOURCE_GROUP" \
   --cluster-name "$CLUSTER" \
   --name gpu1 \
@@ -33,7 +54,7 @@ az aks nodepool add \
 
 # The simulators prefer this pool and tolerate its taint. They have no latency
 # SLO, so the floor is one node and scaling is optional.
-az aks nodepool add \
+run az aks nodepool add \
   --resource-group "$RESOURCE_GROUP" \
   --cluster-name "$CLUSTER" \
   --name cpu1 \
@@ -46,6 +67,6 @@ az aks nodepool add \
   --node-taints "slm.fabric/pool=cpu:NoSchedule" \
   --os-sku Ubuntu
 
-az aks nodepool list --resource-group "$RESOURCE_GROUP" --cluster-name "$CLUSTER" \
+run az aks nodepool list --resource-group "$RESOURCE_GROUP" --cluster-name "$CLUSTER" \
   --query "[].{name:name, vm:vmSize, min:minCount, max:maxCount, labels:nodeLabels, taints:nodeTaints}" \
   --output table

@@ -136,7 +136,7 @@ More detail: `python scripts/doctor.py` names the exact fix for each FAIL.
 
 ```bash
 make logs          # follow all services
-make test          # 349 unit tests, no GPU or cluster needed
+make test          # 362 unit tests, no GPU or cluster needed
 make smoke-policy  # admission, residency veto, canary stability, audit chain
 make adapter-train # QLoRA v1/v2, then hot-load them (~25 min of GPU)
 make bench         # tier benchmark matrix
@@ -212,10 +212,19 @@ with evidence links for every row, is in
 
 ## Taking it to real infrastructure
 
-This repository ships the application, its policy and the node-pool *contracts*. It does not
-ship a cluster, Terraform, or a credential. The snippets under
-[`deploy/cloud/`](deploy/cloud/README.md) assume a cluster already exists and add or label
-capacity inside it.
+This repository ships the application, its policy, the node-pool *contracts*, and three
+bring-up scripts that build a managed cluster for them. It does not ship a cluster you can
+log into, Terraform state, or a credential. Every script has a `--dry-run` that prints the
+full plan — cluster, IAM roles, autoscaler, node pools, pinned add-ons — using only `bash`:
+
+```bash
+deploy/cloud/aws-eks-cluster.sh --dry-run
+deploy/cloud/azure-aks-cluster.sh --dry-run
+deploy/cloud/gcp-gke-cluster.sh --dry-run
+```
+
+Read the plan before running it for real; [deploy/cloud/README.md](deploy/cloud/README.md#bring-up-scripts)
+lists what each script creates, every variable and what it deliberately leaves to you.
 
 ### Baseline every target needs
 
@@ -223,7 +232,7 @@ capacity inside it.
 |---|---|---|
 | Kubernetes 1.31+ (1.34 verified on kind), or OpenShift 4.x | The manifests use `karpenter.sh/v1`, `subPath` Secret mounts and PSS `restricted`; the OpenShift overlay is statically validated, not run | `kubectl version` |
 | One GPU node class and one CPU node class | `vllm-gpu` selects the GPU pool; the simulators prefer the CPU pool | `kubectl get nodes -L nvidia.com/gpu.present` |
-| NVIDIA GPU Operator (driver, device plugin, NFD) | Nothing in this repo installs a driver; without the plugin `nvidia.com/gpu` never appears in `allocatable` | `kubectl get node <gpu> -o jsonpath='{.status.allocatable.nvidia\.com/gpu}'` |
+| NVIDIA GPU Operator (driver, device plugin, NFD) | `deploy/cloud/bootstrap-addons.sh` installs it, pinned; without the device plugin `nvidia.com/gpu` never appears in `allocatable` | `kubectl get node <gpu> -o jsonpath='{.status.allocatable.nvidia\.com/gpu}'` |
 | A storage class that supports `ReadWriteMany` | One replica runs on `ReadWriteOnce`; a second GPU replica shares the model and adapter claims, and the autoscaling component patches them to RWX | `kubectl get storageclass` |
 | Argo CD and Kyverno, or your own equivalent | GitOps sync waves and the six `Enforce` policies | `kubectl get crd \| grep -E 'argoproj\|kyverno'` |
 | Route/Ingress with TLS, and a default-deny NetworkPolicy | The gateway is reached over the edge, and egress is closed by default | `make cluster-health` |
@@ -241,12 +250,14 @@ long-lived key committed or pasted anywhere.
 | **Google / GKE** | `deploy/cloud/gcp-gke-nodepools.sh` (`gcloud container node-pools create` ×2) | `gcloud auth login`, or a service account key held in your CI secret store | `roles/container.admin`, `roles/compute.admin`, `roles/iam.serviceAccountUser` on the project; node service account `roles/container.defaultNodeServiceAccount` (or a custom role with logging and monitoring) | **`nvidia-l4` GPUs** in the region (`gcloud compute regions describe <region> --format='value(quotas)'`), or A100 if you change `GPU_TYPE`; `e2-standard-8` CPU quota |
 | **On-prem / OpenShift** | `deploy/cloud/onprem-workers.sh` (labels + taints existing workers) | `oc login` as cluster admin (or an account allowed to label nodes and scale MachineSets) | `nodes` patch plus `machinesets` scale in `openshift-machine-api`; the GPU MachineSet is provisioned by the platform team | A `ReadWriteMany` storage class and enough GPUs for the replica bounds in `config/capacity.yaml` |
 
-The provider snippets install no driver and no autoscaler of their own: AWS needs Karpenter
-running, Azure and GCP use their per-pool cluster autoscalers, and on-prem nodes are added by
-a MachineSet or by hand. Every pool is joined to the app by two labels and two taints — see
-[the contract](deploy/cloud/README.md#the-contract). `make fleet-check` validates the
-inventory in `config/fleet.yaml`; `python tools/fleet_status.py --live` shows how many GPU
-nodes each cluster actually reports.
+The node-pool snippets only add capacity to a cluster that already exists. For a
+first cluster, `deploy/cloud/{aws-eks,azure-aks,gcp-gke}-cluster.sh` create the control plane,
+the system pool, the autoscaler (Karpenter on EKS; the managed autoscaler on AKS and GKE) and
+then call that provider's snippet; `bootstrap-addons.sh` installs the NVIDIA GPU Operator, KEDA,
+Argo CD and Kyverno with pinned chart versions. Every pool is joined to the app by two labels
+and two taints — see [the contract](deploy/cloud/README.md#the-contract). `make fleet-check`
+validates the inventory in `config/fleet.yaml`; `python tools/fleet_status.py --live` shows how
+many GPU nodes each cluster actually reports.
 
 ### Credentials the platform itself needs
 
@@ -273,9 +284,12 @@ Before sending tenant traffic to any of it, run
 `PYTHONPATH=src python -m tools.check_backend --policy config/policy.yaml --keys <keys.yaml>` —
 one line per external candidate, exit 1 if any is unconfigured, unauthenticated or down.
 
-**What this repo will not do for you:** create the cluster, install Karpenter/KEDA/GPU
-Operator/Argo CD/Kyverno, buy GPU quota, or hold a credential. Those are the parts that cost
-money and need an account; everything after them is manifests in Git.
+**What this repo will not do for you:** run the bring-up scripts against your account, buy GPU
+quota, or hold a credential. Those are the parts that cost money and need an account. The
+scripts also stop at the cluster boundary: the tenant Secret, Argo CD's repository
+registration, the `ReadWriteMany` storage class and the `config/fleet.yaml` entry stay yours,
+because a script cannot know your identity provider or storage backend. No script here has
+been run against a real account yet (R-17).
 
 ---
 
@@ -327,10 +341,10 @@ Full map: [repository map](docs/technical-notes.md#repository-map).
 |---|---|
 | Real clusters, IAM permissions and GPU quotas | [Taking it to real infrastructure](#taking-it-to-real-infrastructure), [deploy/cloud/README.md](deploy/cloud/README.md) |
 | Evidence, contracts and measurement detail | [docs/technical-notes.md](docs/technical-notes.md) |
-| Why each decision was made | [ADR-0001…0012](docs/adr/) — one record per choice |
+| Why each decision was made | [ADR-0001…0013](docs/adr/) — one record per choice |
 | Cluster deployment and air gap | [Kubernetes and OpenShift](docs/technical-notes.md#kubernetes-and-openshift) |
 | The release and review pack | [Signed releases](docs/technical-notes.md#signed-releases-and-the-review-pack), [docs/signoff/](docs/signoff/) |
-| What was not proven | [acceptance.md](docs/signoff/acceptance.md) — A-01…A-29, N-01…N-13, C-01…C-10 |
+| What was not proven | [acceptance.md](docs/signoff/acceptance.md) — A-01…A-30, N-01…N-14, C-01…C-10 |
 
 ---
 
@@ -339,8 +353,9 @@ Full map: [repository map](docs/technical-notes.md#repository-map).
 - CPU and cloud throughput are **modelled**, calibrated against a documented profile.
 - OpenShift, the air-gap mirror and the release hooks are **statically validated**, not
   observed on a live cluster.
-- The AWS, Azure and GCP node-pool snippets are **contracts, not tested infrastructure**: none
-  has been applied to a real account, so quota, IAM and instance availability are unverified
+- The AWS, Azure and GCP node-pool snippets and their bring-up scripts are **plans, not tested
+  infrastructure**: their `--dry-run` output is checked by tests, but none has been applied to
+  a real account, so quota, IAM propagation and instance availability are unverified
   (R-17). No external model provider or IdP has been contacted either (R-18, N-13).
 - The gateway is deliberately **one replica**: quotas, breakers and the audit chain live
   in-process. Scaling it needs a shared counter first.

@@ -2,6 +2,7 @@
 # Create the GPU and CPU pools on an existing GKE cluster.
 #
 #   CLUSTER=slm-fabric LOCATION=europe-west1 deploy/cloud/gcp-gke-nodepools.sh
+#   CLUSTER=slm-fabric LOCATION=europe-west1 deploy/cloud/gcp-gke-nodepools.sh --dry-run
 #
 # GKE installs the driver when gpu-driver-version is set; pair the pool with the
 # NVIDIA GPU Operator if you want one driver/device-plugin path across providers
@@ -13,9 +14,29 @@ LOCATION=${LOCATION:?set LOCATION to the region or zone}
 GPU_MACHINE_TYPE=${GPU_MACHINE_TYPE:-g2-standard-8}
 GPU_TYPE=${GPU_TYPE:-nvidia-l4}
 CPU_MACHINE_TYPE=${CPU_MACHINE_TYPE:-e2-standard-8}
+DRY_RUN=0
+
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run) DRY_RUN=1 ;;
+    *)
+      echo "unknown argument: $arg" >&2
+      exit 2
+      ;;
+  esac
+done
+
+run() {
+  if [ "$DRY_RUN" = 1 ]; then
+    printf '+ %s
+' "$*"
+  else
+    "$@"
+  fi
+}
 
 # Minimum one keeps a warm replica; maximum follows config/capacity.yaml.
-gcloud container node-pools create slm-gpu \
+run gcloud container node-pools create slm-gpu \
   --cluster "$CLUSTER" \
   --location "$LOCATION" \
   --machine-type "$GPU_MACHINE_TYPE" \
@@ -28,7 +49,7 @@ gcloud container node-pools create slm-gpu \
   --enable-autorepair \
   --enable-autoupgrade
 
-gcloud container node-pools create slm-cpu \
+run gcloud container node-pools create slm-cpu \
   --cluster "$CLUSTER" \
   --location "$LOCATION" \
   --machine-type "$CPU_MACHINE_TYPE" \
@@ -40,5 +61,5 @@ gcloud container node-pools create slm-cpu \
   --enable-autorepair \
   --enable-autoupgrade
 
-gcloud container node-pools list --cluster "$CLUSTER" --location "$LOCATION" \
+run gcloud container node-pools list --cluster "$CLUSTER" --location "$LOCATION" \
   --format="table(name, config.machineType, autoscaling.minNodeCount, autoscaling.maxNodeCount)"

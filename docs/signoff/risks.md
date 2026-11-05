@@ -245,19 +245,25 @@ claim.
 node-pool contracts for EKS, AKS, GKE and on-prem OpenShift. `cloud-burst` is marked
 `provider: simulated`, so no reviewer can mistake it for working cloud capacity. Stage 2
 added the path an external pool needs: `external: true`, an `access` key reference, an
-optional key Secret, CA verification, health probes and an opt-in egress rule.
+optional key Secret, CA verification, health probes and an opt-in egress rule. Cluster
+bring-up scripts now create the control plane, identity federation, autoscaler and pinned
+add-ons those pools attach to, and `tests/test_cloud_bringup.py` executes every one under
+`--dry-run` without a provider CLI (A-30).
 
-**Residual.** No snippet in `deploy/cloud/` has been applied to a provider, no candidate in
-the shipped policy is external, and the shipped egress component carries a TEST-NET-2
-placeholder. A team that applies a snippet will get nodes; a team that adds a candidate gets
-a route that the validator will insist is complete, but no provider has accepted the key or
-the certificate yet. The registry can also describe more replicas than the cluster has GPUs,
-in which case extra pods stay Pending instead of failing loudly.
+**Residual.** No script in `deploy/cloud/` has been applied to a provider, no cluster exists,
+and no candidate in the shipped policy is external; the shipped egress component carries a
+TEST-NET-2 placeholder. A dry run proves the command shape and the IAM scoping, not that
+quota, IAM propagation, AMI resolution or GPU availability will cooperate (N-14). A team that
+runs a script will get a cluster and pools; a team that adds a candidate gets a route that the
+validator will insist is complete, but no provider has accepted the key or the certificate
+yet. The registry can also describe more replicas than the cluster has GPUs, in which case
+extra pods stay Pending instead of failing loudly.
 
-**Closure.** Provision one provider pool end to end: apply the snippet, add the external
-pool and candidate, create `slm-backend-keys`, replace the placeholder CIDR, and attach the
-measured result (C-01). Until then, keep the simulator label and do not set the registry's
-`max` above the GPUs actually provisioned.
+**Closure.** Run one bring-up script against a real account and provision that provider's pool
+end to end: confirm the cluster and GPU pool, add the external pool and candidate, create
+`slm-backend-keys`, replace the placeholder CIDR, and attach the measured result (C-01). Until
+then, keep the simulator label and do not set the registry's `max` above the GPUs actually
+provisioned.
 
 ### R-18 — External backend path is unproven against a provider
 

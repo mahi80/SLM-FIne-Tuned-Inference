@@ -1,8 +1,11 @@
-# Node pools
+# Node pools and cluster bring-up
 
-Capacity contracts for the machines the router may send work to. Nothing here is
-rendered by Kustomize or synced by Argo CD: node pools belong to the cluster
-owner, and only the label/taint contract is shared with the application.
+Capacity contracts for the machines the router may send work to, plus the scripts
+that build a managed cluster the contracts can land on. Nothing here is rendered
+by Kustomize or synced by Argo CD: the cluster belongs to its owner, and only the
+label/taint contract is shared with the application.
+
+## Capacity contracts
 
 | File | Provider | Creates |
 | --- | --- | --- |
@@ -15,10 +18,59 @@ Each snippet creates a GPU pool and a CPU pool. The names, sizes and bounds are
 examples: the contract is the two labels and two taints, which the deployment
 tree already expects.
 
+## Bring-up scripts
+
+| File | Provider | Creates |
+| --- | --- | --- |
+| `aws-eks-cluster.sh` | EKS | control plane, one system node group, Karpenter (IAM policy, controller role, node role, instance profile, Helm release), then the NodePools |
+| `azure-aks-cluster.sh` | AKS | resource group, cluster with workload identity and Calico, then the two pools |
+| `gcp-gke-cluster.sh` | GKE | regional cluster with Workload Identity, then the two pools |
+| `bootstrap-addons.sh` | any | NVIDIA GPU Operator, KEDA, Argo CD, Kyverno — pinned and waited on |
+| `aws-karpenter-controller-policy.json` | EKS | the controller policy the first script attaches; `iam:PassRole` is scoped to the node role and its EC2 trust |
+
+Each script prints every command it would run under `--dry-run`, which needs only
+`bash` — no provider CLI, no credential, no account. Without the flag it refuses
+to start until the provider CLI, `helm` and `kubectl` are on the path, then runs
+the same commands for real. It never prints a credential; what it prints is the
+account, subscription or project it is about to spend money in.
+
+```bash
+# read the plan first — this is the review artifact
+deploy/cloud/aws-eks-cluster.sh --dry-run
+deploy/cloud/azure-aks-cluster.sh --dry-run
+deploy/cloud/gcp-gke-cluster.sh --dry-run
+deploy/cloud/bootstrap-addons.sh --dry-run
+
+# then, with credentials and quota in place
+CLUSTER=slm-fabric REGION=eu-west-1 deploy/cloud/aws-eks-cluster.sh
+```
+
+Defaults are overridable per run:
+
+| Script | Variables |
+| --- | --- |
+| `aws-eks-cluster.sh` | `CLUSTER`, `REGION` (`AWS_REGION`), `K8S_VERSION`, `SYSTEM_NODE_TYPE`, `SYSTEM_MIN`, `SYSTEM_MAX`, `KARPENTER_VERSION` |
+| `azure-aks-cluster.sh` | `RESOURCE_GROUP`, `CLUSTER`, `LOCATION`, `K8S_VERSION`, `SYSTEM_VM_SIZE` |
+| `gcp-gke-cluster.sh` | `PROJECT`, `CLUSTER`, `LOCATION`, `K8S_VERSION`, `SYSTEM_MACHINE_TYPE`, `SYSTEM_MIN`, `SYSTEM_MAX` |
+| `bootstrap-addons.sh` | `GPU_OPERATOR_VERSION`, `KEDA_VERSION`, `ARGOCD_VERSION`, `KYVERNO_VERSION`; `--driver=true\|false`, `--skip-keda`, `--skip-gitops` |
+
+The driver flag is not cosmetic. AKS creates GPU pools with `--gpu-driver none`, so
+the operator must install the driver (`--driver=true`, what the AKS script passes).
+EKS accelerated AL2023 and GKE with `gpu-driver-version=latest` already carry a
+driver, so the operator installs only the device plugin and NFD
+(`--driver=false`). Two drivers on one node is a known way to break CUDA.
+
+What the scripts deliberately leave to you: the tenant Secret (`make deploy-secret`),
+the Argo CD repository registration and the platform Application, the
+`ReadWriteMany` storage class, and the entry in `config/fleet.yaml`. Those are
+account- and policy-specific, so a script cannot guess them.
+
 The credential, IAM role and quota each provider needs is listed in
 [Taking it to real infrastructure](../../README.md#taking-it-to-real-infrastructure).
-None of these snippets has been applied to a real account: they are contracts,
-not tested infrastructure (risk R-17).
+No script here has been run against a real account, and no cluster was created: the
+plans are statically checked (`tests/test_cloud_bringup.py`) and reviewed, not
+tested infrastructure (risk R-17). Quota, IAM propagation and instance availability
+are only discovered on the first real run.
 
 ## The contract
 
@@ -28,8 +80,8 @@ GPU nodes
 * taint `nvidia.com/gpu=present:NoSchedule` — keeps CPU workloads and simulators
   off hardware that costs orders of magnitude more per hour.
 * `nvidia.com/gpu` advertised in `status.allocatable` — added by the NVIDIA GPU
-  Operator (driver + device plugin + node-feature-discovery). The snippets do
-  not install it, and on AKS the driver is deliberately left to it.
+  Operator (driver + device plugin + node-feature-discovery). The capacity snippets
+  do not install it; `bootstrap-addons.sh` does, and on AKS it owns the driver too.
 
 CPU nodes
 

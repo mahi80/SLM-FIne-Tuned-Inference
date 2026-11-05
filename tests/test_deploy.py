@@ -658,6 +658,13 @@ class CloudPoolSnippets(unittest.TestCase):
                     check=True,
                     capture_output=True,
                 )
+        # Bring-up and add-on scripts delegate instead of redefining the
+        # contract; only the node-pool scripts carry the labels and taints.
+        contract_scripts = sorted(self.CLOUD.glob("*nodepools*.sh")) + [
+            self.CLOUD / "onprem-workers.sh"
+        ]
+        for path in contract_scripts:
+            with self.subTest(script=path.name):
                 text = path.read_text(encoding="utf-8")
                 self.assertIn(f"{gpu_pool['label']}=true", text)
                 self.assertIn(f"{gpu_pool['taint']}=", text)
