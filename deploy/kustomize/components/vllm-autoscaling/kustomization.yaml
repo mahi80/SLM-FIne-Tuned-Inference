@@ -1,0 +1,63 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+# GPU-tier autoscaling. KEDA reads vLLM's own queue and KV-cache gauges through
+# Prometheus and drives the Deployment's replica count; the node autoscaler
+# supplies the GPU nodes those replicas land on.
+#
+# Prerequisites, enforced or documented in config/capacity.yaml:
+#   * KEDA installed (the ScaledObject CRD is otherwise unknown);
+#   * a ReadWriteMany class for the model cache and adapter claims, because a
+#     ReadWriteOnce claim attaches to one node and blocks a replica on another;
+#   * the declared adapters seeded on the adapter claim, so startup preload can
+#     find them.
+#
+# The PVC access modes below are applied at creation. On an existing install
+# they are immutable: recreate the claims (copy the data) before enabling this
+# component.
+
+resources:
+  - keda-scaledobject.yaml
+
+patches:
+  # KEDA's HPA owns this field. Leaving replicas in Git makes Argo self-heal it
+  # back to the manifest on every sync, fighting the scaler.
+  - target:
+      kind: Deployment
+      name: vllm-gpu
+    patch: |-
+      - op: remove
+        path: /spec/replicas
+
+  # Every replica must be self-sufficient. Startup preload makes a replica
+  # added by the scaler serve the fine-tuned aliases immediately, instead of
+  # waiting for a PostSync hook that only ever reaches one pod.
+  - target:
+      kind: Deployment
+      name: vllm-gpu
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --lora-modules
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: triage-v1=/adapters/triage-v1
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: triage-v2=/adapters/triage-v2
+
+  - target:
+      kind: PersistentVolumeClaim
+      name: slm-model-cache
+    patch: |-
+      - op: replace
+        path: /spec/accessModes
+        value: [ReadWriteMany]
+
+  - target:
+      kind: PersistentVolumeClaim
+      name: slm-adapters
+    patch: |-
+      - op: replace
+        path: /spec/accessModes
+        value: [ReadWriteMany]

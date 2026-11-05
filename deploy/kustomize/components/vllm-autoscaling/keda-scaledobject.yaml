@@ -1,0 +1,95 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: vllm-gpu
+  labels:
+    app.kubernetes.io/name: vllm-gpu
+    app.kubernetes.io/component: gpu-tier
+    app.kubernetes.io/part-of: slm-fabric
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vllm-gpu
+  # Bounds and thresholds are mirrored from config/capacity.yaml; the deploy
+  # validator fails if they drift. KEDA creates the HPA behind this object, so
+  # there is deliberately no separate HorizontalPodAutoscaler to fight it.
+  minReplicaCount: 1
+  maxReplicaCount: 3
+  pollingInterval: 30
+  cooldownPeriod: 900
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        # A new replica downloads nothing (the cache is shared) but still
+        # warms CUDA graphs and compiles kernels. One at a time, then wait:
+        # a second pod adds queue capacity only after the first is serving.
+        scaleUp:
+          stabilizationWindowSeconds: 0
+          policies:
+            - type: Pods
+              value: 1
+              periodSeconds: 300
+        # Keep a burst's routing decisions stable. Breakers and the gateway
+        # already absorb a short spike; scaling down too early would re-add
+        # latency exactly when the next burst arrives.
+        scaleDown:
+          stabilizationWindowSeconds: 900
+          policies:
+            - type: Pods
+              value: 1
+              periodSeconds: 600
+  triggers:
+    - type: prometheus
+      name: queue-depth
+      metadata:
+        serverAddress: https://thanos-querier.openshift-monitoring.svc.cluster.local:9091
+        metricName: vllm_queue_depth
+        query: 'sum(vllm:num_requests_waiting{namespace="slm-fabric"})'
+        threshold: "4"
+        authModes: bearer
+      authenticationRef:
+        name: slm-keda-prometheus
+    - type: prometheus
+      name: kv-cache
+      metadata:
+        serverAddress: https://thanos-querier.openshift-monitoring.svc.cluster.local:9091
+        metricName: vllm_kv_cache
+        query: 'avg(vllm:gpu_cache_usage_perc{namespace="slm-fabric"})'
+        threshold: "0.85"
+        authModes: bearer
+      authenticationRef:
+        name: slm-keda-prometheus
+---
+# User-workload metrics live behind Thanos, which checks a bearer token. The
+# token and the service CA are created out of band, never in Git:
+#
+#   oc -n slm-fabric create sa keda-scaler
+#   oc adm policy add-cluster-role-to-user cluster-monitoring-view \
+#     -z keda-scaler -n slm-fabric
+#   oc -n slm-fabric create secret generic slm-keda-prometheus \
+#     --from-literal=token="$(oc create token keda-scaler -n slm-fabric --duration=8760h)" \
+#     --from-file=ca.crt=<service-ca.crt from the namespace ConfigMap>
+#
+# `oc create token` defaults to one hour; a short-lived token makes scaling stop
+# while the tier looks idle. Rotate the Secret on a schedule (RB-12).
+#
+# On vanilla Kubernetes with kube-prometheus-stack the endpoint is
+# http://prometheus-operated.monitoring.svc:9090, which needs neither. Patch
+# serverAddress and drop authenticationRef there.
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: slm-keda-prometheus
+  labels:
+    app.kubernetes.io/part-of: slm-fabric
+spec:
+  secretTargetRef:
+    - parameter: bearerToken
+      name: slm-keda-prometheus
+      key: token
+    - parameter: ca
+      name: slm-keda-prometheus
+      key: ca.crt

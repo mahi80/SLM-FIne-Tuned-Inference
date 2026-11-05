@@ -296,6 +296,126 @@ class AlertChecks(unittest.TestCase):
         self.assertTrue(any("no for duration" in error for error in errors))
 
 
+class AutoscalingChecks(unittest.TestCase):
+    CAPACITY = vd.load_capacity()
+
+    @classmethod
+    def scaled_object(cls, **overrides):
+        spec = {
+            "scaleTargetRef": {"apiVersion": "apps/v1", "kind": "Deployment", "name": "vllm-gpu"},
+            "minReplicaCount": cls.CAPACITY["min_replicas"],
+            "maxReplicaCount": cls.CAPACITY["max_replicas"],
+            "triggers": [
+                {
+                    "type": "prometheus",
+                    "name": metric["name"].replace("_", "-"),
+                    "metadata": {
+                        "metricName": metric["keda_metric"],
+                        "query": metric["query"],
+                        "threshold": metric["threshold"],
+                        "serverAddress": "http://prometheus-operated.monitoring.svc:9090",
+                    },
+                }
+                for metric in cls.CAPACITY["metrics"]
+            ],
+        }
+        spec.update(overrides)
+        return {
+            "apiVersion": "keda.sh/v1alpha1",
+            "kind": "ScaledObject",
+            "metadata": {"name": "vllm-gpu", "namespace": "slm-fabric"},
+            "spec": spec,
+        }
+
+    @staticmethod
+    def pvc(name, *modes):
+        return {
+            "apiVersion": "v1",
+            "kind": "PersistentVolumeClaim",
+            "metadata": {"name": name, "namespace": "slm-fabric"},
+            "spec": {"accessModes": list(modes)},
+        }
+
+    @staticmethod
+    def adapter_set(*names):
+        return {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {"name": "slm-adapter-set", "namespace": "slm-fabric"},
+            "data": {"adapters.txt": "\n".join(names) + "\n"},
+        }
+
+    @staticmethod
+    def gpu_deployment(*args):
+        doc = deployment(name="vllm-gpu", args=list(args) or None)
+        del doc["spec"]["replicas"]
+        return doc
+
+    def docs(self, deployment_doc=None, adapter_configmap=None, **overrides):
+        return [
+            deployment_doc
+            or self.gpu_deployment("--lora-modules", "triage-v1=/adapters/triage-v1", "triage-v2=/adapters/triage-v2"),
+            self.pvc("slm-model-cache", "ReadWriteMany"),
+            self.pvc("slm-adapters", "ReadWriteMany"),
+            adapter_configmap or self.adapter_set("triage-v1", "triage-v2"),
+            self.scaled_object(**overrides),
+        ]
+
+    def test_matching_scaler_passes(self):
+        self.assertEqual(vd.check_autoscaling(self.docs(), self.CAPACITY), [])
+
+    def test_scaler_cannot_target_the_gateway(self):
+        scaled = self.scaled_object(
+            scaleTargetRef={"apiVersion": "apps/v1", "kind": "Deployment", "name": "gateway"}
+        )
+        errors = vd.check_autoscaling([scaled], self.CAPACITY)
+        self.assertTrue(any("scales the gateway" in error for error in errors))
+
+    def test_gpu_floor_cannot_be_zero(self):
+        capacity = {**self.CAPACITY, "min_replicas": 0}
+        errors = vd.check_autoscaling(self.docs(), capacity)
+        self.assertTrue(any("warm floor" in error for error in errors))
+
+    def test_pinned_replicas_fight_the_scaler(self):
+        doc = self.gpu_deployment("--lora-modules", "triage-v1=/adapters/triage-v1", "triage-v2=/adapters/triage-v2")
+        doc["spec"]["replicas"] = 1
+        errors = vd.check_autoscaling(self.docs(deployment_doc=doc), self.CAPACITY)
+        self.assertTrue(any("selfHeal" in error for error in errors))
+
+    def test_bounds_and_thresholds_come_from_capacity(self):
+        errors = vd.check_autoscaling(self.docs(minReplicaCount=2, maxReplicaCount=9), self.CAPACITY)
+        self.assertTrue(any("minReplicaCount" in error for error in errors))
+        self.assertTrue(any("maxReplicaCount" in error for error in errors))
+
+        scaled = self.scaled_object()
+        scaled["spec"]["triggers"][0]["metadata"]["threshold"] = "99"
+        docs = self.docs()
+        docs[-1] = scaled
+        errors = vd.check_autoscaling(docs, self.CAPACITY)
+        self.assertTrue(any("threshold" in error for error in errors))
+
+    def test_https_scraper_needs_authentication(self):
+        scaled = self.scaled_object()
+        for trigger in scaled["spec"]["triggers"]:
+            trigger["metadata"]["serverAddress"] = "https://thanos-querier:9091"
+        errors = vd.check_autoscaling([scaled], self.CAPACITY)
+        self.assertEqual(sum("without authenticationRef" in error for error in errors), 2)
+
+    def test_read_write_once_claim_blocks_a_second_replica(self):
+        docs = self.docs()
+        docs[1] = self.pvc("slm-model-cache", "ReadWriteOnce")
+        errors = vd.check_autoscaling(docs, self.CAPACITY)
+        self.assertTrue(any("slm-model-cache" in error and "ReadWriteMany" in error for error in errors))
+
+    def test_replica_must_preload_declared_adapters(self):
+        errors = vd.check_autoscaling(self.docs(deployment_doc=self.gpu_deployment("--enable-lora")), self.CAPACITY)
+        self.assertTrue(any("starts no adapters" in error for error in errors))
+
+        partial = self.gpu_deployment("--lora-modules", "triage-v1=/adapters/triage-v1")
+        errors = vd.check_autoscaling(self.docs(deployment_doc=partial), self.CAPACITY)
+        self.assertTrue(any("triage-v2" in error for error in errors))
+
+
 class WiringChecks(unittest.TestCase):
     def test_policy_backends_must_have_services(self):
         policy_text = (
@@ -398,6 +518,19 @@ class RenderedOverlays(unittest.TestCase):
         kinds = {doc.get("kind") for doc in vd.render_overlay("vanilla")}
         self.assertNotIn("PrometheusRule", kinds)
         self.assertNotIn("ServiceMonitor", kinds)
+        self.assertNotIn("ScaledObject", kinds)
+
+    def test_gpu_scaler_ships_with_operator_overlays(self):
+        capacity = vd.load_capacity()
+        for overlay in ("openshift", "airgap"):
+            with self.subTest(overlay=overlay):
+                docs = vd.render_overlay(overlay)
+                scaled = next(doc for doc in docs if doc.get("kind") == "ScaledObject")
+                self.assertEqual(scaled["spec"]["minReplicaCount"], capacity["min_replicas"])
+                self.assertEqual(scaled["spec"]["maxReplicaCount"], capacity["max_replicas"])
+                self.assertEqual(vd.check_autoscaling(docs, capacity), [])
+                vllm = next(doc for doc in docs if doc.get("kind") == "Deployment" and doc["metadata"]["name"] == "vllm-gpu")
+                self.assertNotIn("replicas", vllm["spec"])
 
 
 if __name__ == "__main__":

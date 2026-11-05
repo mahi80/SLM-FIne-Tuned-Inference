@@ -135,7 +135,7 @@ the single replica is the honest design.
 
 ### R-09 — No live OpenShift validation
 
-**What exists.** Three overlays render and pass 60+ static assertions; 34 deployment tests
+**What exists.** Three overlays render and pass 60+ static assertions; 43 deployment tests
 cover the failure modes that matter; Kyverno policies and Argo CD applications are committed.
 A kind v0.33.0 cluster then applied the vanilla overlay, admitted and rejected pods through
 Kyverno v1.19.2, reconciled two Applications with Argo CD v3.6.1, and found one real defect

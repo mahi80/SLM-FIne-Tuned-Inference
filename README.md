@@ -136,7 +136,7 @@ More detail: `python scripts/doctor.py` names the exact fix for each FAIL.
 
 ```bash
 make logs          # follow all services
-make test          # 144 unit tests, no GPU or cluster needed
+make test          # 153 unit tests, no GPU or cluster needed
 make smoke-policy  # admission, residency veto, canary stability, audit chain
 make adapter-train # QLoRA v1/v2, then hot-load them (~25 min of GPU)
 make bench         # tier benchmark matrix
@@ -200,7 +200,7 @@ flowchart LR
 | GPU tier, adapters, gateway, router, audit, benchmarks, eval gate, cost model | **Measured** on this machine |
 | CPU and cloud tiers | **Modelled** — calibrated simulators, `x-simulated: true` |
 | Vanilla Kubernetes overlay, Kyverno, Argo CD | **Observed** on a kind cluster (A-17…A-21) |
-| OpenShift overlay, air-gap mirror, release hooks | **Static validation only** |
+| OpenShift overlay, GPU autoscaling, air-gap mirror, release hooks | **Static validation only** |
 | Signed release manifest, CI pipeline | **Verified** — signature, drift checks and a green CI run |
 
 Numbers from a simulated tier are labelled `MODELLED` everywhere they appear. The full table,
@@ -238,7 +238,7 @@ cloud profile is 56,069 requests/day. Method and limits in
 
 ```
 compose.yaml           the whole platform: tiers, gateway, observability
-config/                policy, bench, eval gates, cost, release pins, tenant example
+config/                policy, bench, eval gates, cost, capacity, release pins, tenant example
 src/                   gateway, router, tiersim, registry, bench, eval, cost
 finetune/              prompt contract, dataset generator, QLoRA trainer, evaluation
 deploy/                kustomize overlays (openshift/vanilla/airgap), GitOps, Kyverno
@@ -259,7 +259,7 @@ Full map: [repository map](docs/technical-notes.md#repository-map).
 | Why each decision was made | [ADR-0001…0007](docs/adr/) — one record per choice |
 | Cluster deployment and air gap | [Kubernetes and OpenShift](docs/technical-notes.md#kubernetes-and-openshift) |
 | The release and review pack | [Signed releases](docs/technical-notes.md#signed-releases-and-the-review-pack), [docs/signoff/](docs/signoff/) |
-| What was not proven | [acceptance.md](docs/signoff/acceptance.md) — A-01…A-23, N-01…N-11, C-01…C-10 |
+| What was not proven | [acceptance.md](docs/signoff/acceptance.md) — A-01…A-24, N-01…N-11, C-01…C-10 |
 
 ---
 

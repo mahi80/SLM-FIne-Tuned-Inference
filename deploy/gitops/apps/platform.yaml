@@ -27,6 +27,14 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     namespace: slm-fabric
+  # KEDA's HPA owns the GPU tier's replica count. Without this, selfHeal would
+  # write the manifest value back on every sync and undo every scale event.
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      name: vllm-gpu
+      jsonPointers:
+        - /spec/replicas
   syncPolicy:
     automated:
       prune: true

@@ -1,0 +1,58 @@
+# Capacity policy for the GPU tier, and the source of truth for its scaler.
+#
+# tools/validate_deploy.py fails when the rendered KEDA ScaledObject disagrees
+# with this file, so a threshold change is a reviewed edit here rather than an
+# out-of-band `kubectl edit` on the HPA.
+#
+# Only the GPU tier autoscales today. The CPU simulators are cheap enough to
+# keep at one replica, and the cloud standby is gated by tenant policy — adding
+# capacity there is a routing decision, not a load decision.
+version: 1
+
+gpu:
+  workload: vllm-gpu
+
+  # A replica owns a whole GPU and reloads weights on start (minutes, not
+  # seconds), so the floor is one warm replica and scale-up is one pod per
+  # period. Zero would trade every request for a cold start.
+  min_replicas: 1
+  max_replicas: 3
+  gpus_per_replica: 1
+
+  # Triggers are OR-ed by KEDA: whichever asks for more replicas wins.
+  metrics:
+    - name: queue_depth
+      keda_metric: vllm_queue_depth
+      # A summed queue divided by the threshold is the replica count, so four
+      # waiting per replica is the line — not one global number.
+      query: 'sum(vllm:num_requests_waiting{namespace="slm-fabric"})'
+      threshold: "4"
+      why: >-
+        vLLM admits 16 sequences at a time. A quarter of a batch waiting per
+        replica means the next token is already late.
+
+    - name: kv_cache
+      keda_metric: vllm_kv_cache
+      query: 'avg(vllm:gpu_cache_usage_perc{namespace="slm-fabric"})'
+      threshold: "0.85"
+      why: >-
+        Above roughly 85% the engine starts preempting sequences. Queue depth
+        reacts after that, which is too late for the latency SLO.
+
+  # Conditions the manifests enforce before replicas may exceed one.
+  prerequisites:
+    # Each replica mounts the model cache and the adapter set. A
+    # ReadWriteOnce claim attaches to a single node, so a second replica on a
+    # new GPU node cannot start.
+    storage_access_mode: ReadWriteMany
+    # A replica that starts without the declared adapters would serve base
+    # weights for a fine-tuned alias. vLLM preloads the set at startup.
+    preload_adapters: true
+
+  # Nodes are added by the cluster's node autoscaler (Karpenter, Cluster
+  # Autoscaler, or OpenShift MachineAutoscaler). Without one, replicas beyond
+  # the available GPUs stay Pending and the queue keeps growing.
+  node_pool:
+    label: nvidia.com/gpu.present
+    taint: nvidia.com/gpu
+    autoscaler: external

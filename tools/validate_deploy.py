@@ -17,6 +17,9 @@ What it protects, in order of how expensive the mistake is:
     tainted CPU pool, so simulators cannot consume GPU capacity;
   * the five platform alerts exist on every overlay that installs the
     Prometheus Operator, each with a window and a severity;
+  * the GPU scaler matches config/capacity.yaml, keeps a warm floor, shares an
+    RWX claim and preloads every declared adapter — and never scales the
+    gateway, whose quota, breaker and audit state is in-process.
   * the gateway is a single replica, because its quota, breaker and audit state
     is in-process.
 """
@@ -473,6 +476,156 @@ def check_alerts(docs: list[dict]) -> list[str]:
     return errors
 
 
+CAPACITY_PATH = REPO / "config/capacity.yaml"
+SCALER_KINDS = {"ScaledObject", "HorizontalPodAutoscaler"}
+SHARED_CLAIMS = ("slm-model-cache", "slm-adapters")
+
+
+def load_capacity(path: Path = CAPACITY_PATH) -> dict:
+    """The scaling bounds live in config/capacity.yaml so the deployment, the
+    scaling controller and this validator cannot disagree about them."""
+    data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    gpu = data.get("gpu") or {}
+    try:
+        bounds = (int(gpu["min_replicas"]), int(gpu["max_replicas"]))
+        workload = str(gpu["workload"])
+        metrics = list(gpu["metrics"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError(f"{path} does not declare GPU replica bounds and metrics") from exc
+    if not workload or not metrics:
+        raise RuntimeError(f"{path} does not declare a GPU workload and at least one metric")
+    return {"workload": workload, "min_replicas": bounds[0], "max_replicas": bounds[1],
+            "metrics": metrics}
+
+
+def _norm(text) -> str:
+    return " ".join(str(text or "").split())
+
+
+def check_autoscaling(docs: list[dict], capacity: dict) -> list[str]:
+    """Scaling is the one place where a manifest can be valid YAML and still
+    take the platform down: a scaler on the gateway replicates in-process state,
+    a GPU floor of zero turns a warm tier cold, a shared claim that is not RWX
+    deadlocks the second replica, and a replica without preloaded adapters
+    answers alias traffic with a 404.
+    """
+    errors = []
+    workload = capacity["workload"]
+    minimum = capacity["min_replicas"]
+    maximum = capacity["max_replicas"]
+    if minimum < 1:
+        errors.append(f"config/capacity.yaml allows {workload} to scale to zero; the GPU tier keeps a warm floor")
+    if maximum < minimum:
+        errors.append(f"config/capacity.yaml has max_replicas {maximum} below min_replicas {minimum}")
+
+    scalers = [doc for doc in docs if doc.get("kind") in SCALER_KINDS]
+    for scaler in scalers:
+        if ((scaler.get("spec") or {}).get("scaleTargetRef") or {}).get("name") == "gateway":
+            errors.append(
+                f"{label(scaler)} scales the gateway; its quota, breaker and audit state "
+                "is in-process and cannot be replicated"
+            )
+
+    scaled_object = find(docs, "ScaledObject", workload)
+    if scaled_object is None:
+        return errors
+
+    spec = scaled_object.get("spec") or {}
+    target = spec.get("scaleTargetRef") or {}
+    deployment = find(docs, "Deployment", workload)
+    if target.get("kind") != "Deployment" or target.get("name") != workload:
+        errors.append(
+            f"ScaledObject/{workload} targets {target.get('kind')}/{target.get('name')}, "
+            f"expected Deployment/{workload}"
+        )
+    if spec.get("minReplicaCount") != minimum:
+        errors.append(
+            f"ScaledObject/{workload} minReplicaCount is {spec.get('minReplicaCount')}, "
+            f"config/capacity.yaml says {minimum}"
+        )
+    if spec.get("maxReplicaCount") != maximum:
+        errors.append(
+            f"ScaledObject/{workload} maxReplicaCount is {spec.get('maxReplicaCount')}, "
+            f"config/capacity.yaml says {maximum}"
+        )
+    if deployment is not None and "replicas" in (deployment.get("spec") or {}):
+        errors.append(
+            f"Deployment/{workload} pins spec.replicas while a ScaledObject owns it; "
+            "Argo selfHeal would undo every scale event"
+        )
+
+    triggers = {
+        str((trigger.get("metadata") or {}).get("metricName")): trigger
+        for trigger in spec.get("triggers") or []
+    }
+    for metric in capacity["metrics"]:
+        name = str(metric.get("name"))
+        trigger = triggers.get(str(metric.get("keda_metric")))
+        if trigger is None:
+            errors.append(f"ScaledObject/{workload} has no {name} trigger")
+            continue
+        if trigger.get("type") != "prometheus":
+            errors.append(f"ScaledObject/{workload} trigger {name} is {trigger.get('type')!r}, expected prometheus")
+        metadata = trigger.get("metadata") or {}
+        if metadata.get("metricName") != metric.get("keda_metric"):
+            errors.append(
+                f"ScaledObject/{workload} trigger {name} publishes {metadata.get('metricName')!r}, "
+                f"expected {metric.get('keda_metric')!r}"
+            )
+        if _norm(metadata.get("query")) != _norm(metric.get("query")):
+            errors.append(f"ScaledObject/{workload} trigger {name} query differs from config/capacity.yaml")
+        if str(metadata.get("threshold")) != str(metric.get("threshold")):
+            errors.append(
+                f"ScaledObject/{workload} trigger {name} threshold is {metadata.get('threshold')}, "
+                f"config/capacity.yaml says {metric.get('threshold')}"
+            )
+        if str(metadata.get("serverAddress") or "").startswith("https://") and not trigger.get(
+            "authenticationRef"
+        ):
+            errors.append(
+                f"ScaledObject/{workload} trigger {name} queries HTTPS without authenticationRef"
+            )
+
+    if maximum > 1:
+        for claim in SHARED_CLAIMS:
+            pvc = find(docs, "PersistentVolumeClaim", claim)
+            if pvc is None:
+                continue
+            modes = (pvc.get("spec") or {}).get("accessModes") or []
+            if "ReadWriteMany" not in modes:
+                errors.append(
+                    f"PersistentVolumeClaim/{claim} is {modes}; {maximum} {workload} replicas "
+                    "need ReadWriteMany to land on more than one node"
+                )
+
+    adapter_set = find(docs, "ConfigMap", "slm-adapter-set")
+    if adapter_set is not None and deployment is not None:
+        declared = [
+            line.strip()
+            for line in str((adapter_set.get("data") or {}).get("adapters.txt", "")).splitlines()
+            if line.strip()
+        ]
+        args = list(((pod_spec(deployment).get("containers") or [{}])[0].get("args") or []))
+        if "--lora-modules" not in args:
+            errors.append(
+                f"Deployment/{workload} starts no adapters; a replica added by the scaler "
+                "would refuse the fine-tuned aliases"
+            )
+        else:
+            preloaded = []
+            for item in args[args.index("--lora-modules") + 1:]:
+                if item.startswith("--"):
+                    break
+                preloaded.append(item)
+            missing = [name for name in declared if f"{name}=/adapters/{name}" not in preloaded]
+            if missing:
+                errors.append(
+                    f"Deployment/{workload} preloads {', '.join(missing)} not at "
+                    f"/adapters/<name>; slm-adapter-set declares {', '.join(declared)}"
+                )
+    return errors
+
+
 def check_overlay(overlay: str, docs: list[dict]) -> list[str]:
     errors = []
     route = find(docs, "Route", "slm-gateway")
@@ -490,6 +643,8 @@ def check_overlay(overlay: str, docs: list[dict]) -> list[str]:
                 errors.append("Route/slm-gateway does not target the gateway Service")
         if servicemonitor is None:
             errors.append("OpenShift overlay has no ServiceMonitor")
+        if find(docs, "ScaledObject") is None:
+            errors.append(f"{overlay} overlay has no ScaledObject; the GPU tier would stay at one replica")
         errors.extend(check_alerts(docs))
         if not any(d.get("kind") == "NetworkPolicy" and d.get("metadata", {}).get("name") == "allow-monitoring-scrape" for d in docs):
             errors.append("OpenShift overlay does not allow Prometheus to scrape the backends")
@@ -506,6 +661,8 @@ def check_overlay(overlay: str, docs: list[dict]) -> list[str]:
                 errors.append("Ingress/slm-gateway does not target gateway:8000")
         if route is not None:
             errors.append("vanilla overlay must not contain an OpenShift Route")
+        if any(doc.get("kind") in SCALER_KINDS for doc in docs):
+            errors.append("vanilla overlay must not contain a scaler; kind has no KEDA or metrics API")
         for doc in workloads(docs):
             sc = pod_spec(doc).get("securityContext") or {}
             if sc.get("runAsUser") != 1001:
@@ -535,7 +692,7 @@ def check_overlay(overlay: str, docs: list[dict]) -> list[str]:
     return errors
 
 
-def validate(docs: list[dict], overlay: str, policy_path: Path) -> list[str]:
+def validate(docs: list[dict], overlay: str, policy_path: Path, capacity: dict | None = None) -> list[str]:
     return [
         *check_images(docs),
         *check_model_pin(docs),
@@ -549,6 +706,7 @@ def validate(docs: list[dict], overlay: str, policy_path: Path) -> list[str]:
         *check_gateway_state(docs),
         *check_no_secrets(docs),
         *check_namespaces(docs),
+        *check_autoscaling(docs, capacity if capacity is not None else load_capacity()),
         *check_overlay(overlay, docs),
     ]
 
@@ -558,9 +716,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--overlay", action="append", choices=OVERLAYS, help="default: all")
     parser.add_argument("--kubectl", default="kubectl")
     parser.add_argument("--policy", type=Path, default=REPO / "config/policy.yaml")
+    parser.add_argument("--capacity", type=Path, default=CAPACITY_PATH)
     args = parser.parse_args(argv)
 
     overlays = args.overlay or list(OVERLAYS)
+    try:
+        capacity = load_capacity(args.capacity)
+    except (RuntimeError, OSError) as exc:
+        print(f"FAIL capacity: {exc}")
+        return 1
     failed = False
     for overlay in overlays:
         try:
@@ -569,7 +733,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"FAIL {overlay}: {exc}")
             failed = True
             continue
-        errors = validate(docs, overlay, args.policy)
+        errors = validate(docs, overlay, args.policy, capacity)
         if errors:
             failed = True
             print(f"FAIL {overlay}: {len(errors)} problem(s) across {len(docs)} objects")

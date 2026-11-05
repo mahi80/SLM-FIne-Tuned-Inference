@@ -87,19 +87,20 @@ kubectl apply -f deploy/gitops/argocd/project.yaml
 kubectl apply -f deploy/gitops/argocd/app-of-apps.yaml
 ```
 
-Prerequisites are Argo CD, Kyverno, the NVIDIA GPU Operator and either Prometheus Operator
-or OpenShift user-workload monitoring. Seed the `slm-adapters` PVC from `make adapter-train`
-before the first sync; the loader hook declares `triage-v1`/`triage-v2` and fails the sync
-if either is absent. The root app syncs admission policy (`slm-policies`, wave 0) before
+Prerequisites are Argo CD, Kyverno, the NVIDIA GPU Operator, KEDA on the operator overlays
+(the `ScaledObject` CRD must exist), a `ReadWriteMany` storage class for the model and
+adapter claims, and either Prometheus Operator or OpenShift user-workload monitoring. Seed
+the `slm-adapters` PVC from `make adapter-train` before the first sync; the loader hook
+declares `triage-v1`/`triage-v2` and fails the sync if either is absent. The root app syncs admission policy (`slm-policies`, wave 0) before
 the platform (`slm-platform`, wave 10); the platform's PostSync hooks then load the
 adapters into vLLM and run the golden-set gate against the served adapter. A failed gate
 leaves the application failed and un-promoted.
 
 ```text
 $ python tools/validate_deploy.py
-OK   openshift: 33 objects
+OK   openshift: 35 objects
 OK   vanilla: 25 objects
-OK   airgap: 32 objects
+OK   airgap: 34 objects
 ```
 
 The validator is the review artifact. It re-renders the overlays and checks:
@@ -113,7 +114,10 @@ The validator is the review artifact. It re-renders the overlays and checks:
   gateway because quota, breaker and audit state are in-process;
 - the overlay actually exposes what it claims: a Route or Ingress for the gateway, a
   ServiceMonitor and scrape policy on OpenShift, offline env in the air gap, and the five
-  platform alerts on every overlay that installs the Prometheus Operator.
+  platform alerts on every overlay that installs the Prometheus Operator;
+- the GPU scaler agrees with `config/capacity.yaml`, keeps a warm floor of at least one
+  replica, shares the model and adapter claims `ReadWriteMany`, preloads every adapter the
+  loader hook declares, and is never pointed at the gateway.
 
 **Two node pools.** The GPU tier is hard-pinned: it selects `nvidia.com/gpu.present=true`
 and tolerates the `nvidia.com/gpu:NoSchedule` taint the GPU Operator applies. The gateway
@@ -162,6 +166,59 @@ advertises a GPU), `SlmBreakerOpen` (a candidate has been failing for five minut
 `SlmPodRestartLoop`. The first and fourth are separated because they need different first
 actions: one is a restart-and-inspect, the other is a backend problem the router is already
 compensating for.
+
+**Scaling the GPU tier.** Bounds and signals live in `config/capacity.yaml`; the
+`vllm-autoscaling` component renders them as a KEDA `ScaledObject` on the OpenShift and
+air-gap overlays. Replicas are not pinned in Git: the component removes `spec.replicas` from
+`Deployment/vllm-gpu`, and the Argo Application ignores that field so `selfHeal` cannot undo
+a scale event.
+
+| Trigger | Query | Threshold | Why |
+|---|---|---|---|
+| queue depth | `sum(vllm:num_requests_waiting{namespace="slm-fabric"})` | 4 waiting | vLLM admits 16 sequences; a quarter of a batch queued means the next token is already late |
+| KV cache | `avg(vllm:gpu_cache_usage_perc{namespace="slm-fabric"})` | 0.85 | above ~85% the engine preempts sequences, and queue depth only reacts after that |
+
+Scale-up adds one pod per five minutes with no stabilisation window; scale-down waits fifteen
+minutes and removes one pod per ten. Both are slow on purpose: a replica costs a whole GPU and
+minutes of weight loading, so the scaler follows a trend, not a spike. The floor is one — the
+warm floor that keeps `slm-triage` answering — and the ceiling is three.
+
+Three things make a second replica useful, and each is enforced rather than hoped for:
+
+- **RWX claims.** A `ReadWriteOnce` claim attaches to one node, so the second pod stays
+  Pending. The component patches `slm-model-cache` and `slm-adapters` to `ReadWriteMany`, and
+  the validator fails the render if either is otherwise. Access modes are immutable, so on an
+  existing install both claims must be recreated before enabling the component.
+- **Per-replica adapter preload.** The PostSync hot-load reaches exactly one pod. The
+  component appends `--lora-modules` entries derived from `slm-adapter-set`, so a replica the
+  scaler adds serves the fine-tuned aliases from its first request.
+- **A node autoscaler.** KEDA sizes pods; it does not add nodes. The GPU pool needs Karpenter,
+  Cluster Autoscaler or an OpenShift `MachineAutoscaler` watching the same
+  `nvidia.com/gpu.present` label and taint.
+
+The gateway is never a scale target: its quota counter, breaker state and audit-chain head
+are in-process, so two replicas would mean two quotas and two forked audit chains. Load sheds
+at the tier, not at the router, and the validator fails any HPA or ScaledObject aimed at
+`gateway`.
+
+On OpenShift the triggers read Thanos and authenticate with a bearer token held in the
+`slm-keda-prometheus` Secret, created out of band and never committed:
+
+```bash
+oc create sa keda-scaler -n slm-fabric
+oc adm policy add-cluster-role-to-user cluster-monitoring-view -z keda-scaler -n slm-fabric
+oc create token keda-scaler -n slm-fabric --duration=8760h > /tmp/token
+oc get configmap service-ca.crt -n openshift-config-managed \
+  -o jsonpath='{.data.service-ca\.crt}' > /tmp/service-ca.crt
+oc create secret generic slm-keda-prometheus -n slm-fabric \
+  --from-file=token=/tmp/token \
+  --from-file=ca.crt=/tmp/service-ca.crt
+rm /tmp/token /tmp/service-ca.crt
+```
+
+Vanilla and kind get no scaler at all — kind has neither KEDA nor a second GPU node — so the
+base Deployment keeps its single, explicitly pinned replica, and the validator rejects a
+scaler in that overlay.
 
 **Air gap.** Mirror the images with `deploy/openshift/airgap/mirror.sh`, apply the
 cluster-scoped `IDMS`/`ITMS` objects with `kubectl apply -k deploy/openshift/airgap`, point
@@ -230,7 +287,7 @@ The review pack answers the questions a reviewer actually asks, in order:
 |---|---|
 | [requirements.md](signoff/requirements.md) | What was asked, requirement by requirement, and which ones are not met |
 | [c4.md](architecture/c4.md) | What the system is: L1–L4 views, runtime sequence, trust boundaries |
-| [acceptance.md](signoff/acceptance.md) | What was verified (A-01…A-23), what was not (N-01…N-11), and the conditions (C-01…C-10) |
+| [acceptance.md](signoff/acceptance.md) | What was verified (A-01…A-24), what was not (N-01…N-11), and the conditions (C-01…C-10) |
 | [threat-model.md](signoff/threat-model.md) | What can go wrong, by asset, actor and entry point |
 | [risks.md](signoff/risks.md) | Which risks are accepted, with anchors into the code |
 | [operations.md](signoff/operations.md) | How it runs: SLOs, alerts, runbooks, backups |
@@ -656,6 +713,7 @@ config/bench.yaml                benchmark targets, concurrency levels and promp
 config/eval-gates.yaml           release floors and drift allowances
 config/cost.yaml                 ownership assumptions: capex, power, utilisation, workload
 config/release.yaml              release identity: model pin, images, adapters, gate, evidence
+config/capacity.yaml             GPU scaling bounds, trigger queries/thresholds, prerequisites
 config/tenants.example.yaml      tenant keys, quotas, region, data class; tenants.yaml is gitignored
 scripts/smoke.py                 GPU tier smoke test
 scripts/smoke_gateway.py         end-to-end test through the gateway, all tiers

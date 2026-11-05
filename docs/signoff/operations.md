@@ -222,6 +222,35 @@ unavailable. Every request fails, regardless of tier health.
    exhausts the gateway is a memory bug, and a larger limit only lengthens the outage.
 4. Record the restart window; audit records before the last restart are still on the PVC.
 
+### RB-12 — GPU tier will not scale, or will not settle
+
+**Signal:** `kubectl -n slm-fabric get scaledobject vllm-gpu` shows desired replicas above
+the running count for more than ten minutes, or the count oscillates between syncs.
+
+1. Read the scaler, not the pods first:
+   `kubectl -n slm-fabric get scaledobject vllm-gpu -o jsonpath='{.status.conditions}'`. A
+   `Ready=False` condition with `FailedGetExternalMetric` means the trigger cannot reach
+   Prometheus or Thanos, not that the tier is idle. The usual cause is an expired
+   `slm-keda-prometheus` token; recreate that Secret (never commit it) and resync. The token
+   is issued for 8760h, so put its rotation on the same calendar as key rotation (RB-08).
+2. If the HPA asks for more replicas but they stay Pending, inspect the pod:
+   `kubectl -n slm-fabric describe pod -l app.kubernetes.io/name=vllm-gpu`. A multi-attach
+   error means a claim is still `ReadWriteOnce`; a `0/3 nodes available` event means no GPU
+   node exists — KEDA adds pods, the node autoscaler adds nodes. Check the GPU pool
+   (`kubectl get machines`, Karpenter NodePools) before touching the scaler.
+3. If replicas come up but never become Ready, check the startup log for the adapter preload:
+   a replica started without `--lora-modules` will serve base-model output for the
+   `slm-triage` aliases. The scaler is correct; the manifest is not.
+4. If the count oscillates, do not shorten the windows. A replica takes minutes to load
+   weights and a whole GPU to run; the 15-minute scale-down window exists to stop exactly
+   this. Treat oscillation as a capacity-planning signal and revisit the thresholds in
+   `config/capacity.yaml` with measured queue depth.
+5. To override during an incident, break the Git loop explicitly: pause auto-sync, change
+   the bound in `config/capacity.yaml` or patch the ScaledObject, then restore both when the
+   incident closes. A patch without pausing is reverted by `selfHeal`.
+6. Never point the scaler at the gateway. If the gateway is short of capacity, that is RB-10
+   or RB-09 — the answer is routing and quota, not a second copy of in-process state.
+
 ## Backup and restore
 
 | Item | Backup | Restore | Tested |

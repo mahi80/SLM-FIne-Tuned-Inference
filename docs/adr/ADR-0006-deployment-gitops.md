@@ -111,13 +111,17 @@ Three properties from earlier phases made the deployment design non-obvious:
 
 ### Verified here
 
-- Three overlays render with `kubectl kustomize` (v5.7.1): 33 objects for OpenShift,
-  25 for vanilla, 31 for air-gap (the model-download policy is deleted).
+- Three overlays render with `kubectl kustomize` (v5.7.1): 35 objects for OpenShift,
+  25 for vanilla, 34 for air-gap (the model-download policy is deleted).
 - `python tools/validate_deploy.py` passes all three: image pins, model revision, security
   contexts, resources, probes, Service/policy wiring, ConfigMap equality, single-replica
-  gateway, no Secrets, namespace placement, overlay-specific exposure.
-- 34 deployment tests (synthetic negative cases plus rendered-overlay integration); the
-  full suite is 144 tests.
+  gateway, no Secrets, namespace placement, GPU scaling policy, overlay-specific exposure.
+- 43 deployment tests (synthetic negative cases plus rendered-overlay integration); the
+  full suite is 153 tests.
+- The GPU tier scales through KEDA on the operator overlays: `config/capacity.yaml` holds the
+  bounds and both trigger thresholds, the `ScaledObject` reads vLLM's queue-depth and KV-cache
+  gauges, replicas are removed from Git, the model and adapter claims are `ReadWriteMany`, and
+  every replica preloads the declared adapters. The gateway is never a scale target.
 - A kind v0.33.0 cluster applied the vanilla overlay (25 objects, gateway and both
   simulators running), evaluated the Kyverno policies in Enforce, and reconciled the
   policies Application with self-heal. That pass found a nested `subPath` mount that static

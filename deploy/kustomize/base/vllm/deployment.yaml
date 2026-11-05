@@ -10,9 +10,13 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "3"
 spec:
+  # One GPU and one model copy per replica. The vllm-autoscaling component
+  # removes this field on clusters with KEDA so the ScaledObject owns it;
+  # without that component (vanilla, and `make kind-up`) the tier stays here.
   replicas: 1
-  # One GPU, one model copy: a surge pod would need a second GPU and would
-  # halve KV-cache headroom. Downtime is covered at the router, not here.
+  # A rollout stops the old pod before starting the new one: two model copies
+  # would need two GPUs. Scaling adds replicas; updates still take the tier
+  # briefly out of rotation, which is why the canary path exists.
   strategy:
     type: Recreate
   selector:
