@@ -42,11 +42,11 @@ images:
   - name: slm/gateway
     newName: ghcr.io/mahi80/slm-gateway
     newTag: "0.5.0"
-    digest: sha256:93082cf46037c8a59fc4b6bd8e2597d475b89eb90252746b12ff6397c4123ca8
+    digest: sha256:ebd974fef34f52ccb642b61071b3df60daf573db9820a6ab67fb491b0ee18589
   - name: slm/tiersim
     newName: ghcr.io/mahi80/slm-tiersim
     newTag: "0.5.0"
-    digest: sha256:3fb5f66cb50a5a2a68fb2d16f7ce9b91481a8e66e46dfb7915fa81e05359b26a
+    digest: sha256:ef8494fd217564ff3c5ed83b517b7ff8ff62a30f2fb67803d6d5f5a078d100ab
 
 labels:
   - pairs:

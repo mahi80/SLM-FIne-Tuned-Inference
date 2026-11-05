@@ -24,13 +24,13 @@ images:
     digest: sha256:d825baf9ce4b1b6bfc5ecc7b79880c7e6748c65a72d697ce3d47607aafa84c6e
   - name: ghcr.io/mahi80/slm-gateway
     tag: "0.5.0"
-    digest: sha256:93082cf46037c8a59fc4b6bd8e2597d475b89eb90252746b12ff6397c4123ca8
+    digest: sha256:ebd974fef34f52ccb642b61071b3df60daf573db9820a6ab67fb491b0ee18589
   - name: ghcr.io/mahi80/slm-tiersim
     tag: "0.5.0"
-    digest: sha256:3fb5f66cb50a5a2a68fb2d16f7ce9b91481a8e66e46dfb7915fa81e05359b26a
+    digest: sha256:ef8494fd217564ff3c5ed83b517b7ff8ff62a30f2fb67803d6d5f5a078d100ab
   - name: ghcr.io/mahi80/slm-eval
     tag: "0.5.0"
-    digest: sha256:3fca8a9fd839ec65274c50837c316b55607fbb5ef7dab5d765cd77ea486189ad
+    digest: sha256:680f4896c87465cf07a18e8e54b5002452b32ce4c96549f196833a44108e477a
 
 adapters:
   - name: triage-v1
