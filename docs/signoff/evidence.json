@@ -16,7 +16,7 @@
     "platform": "Windows-11-10.0.26200-SP0",
     "python": "3.12.10"
   },
-  "generated_at": "2026-11-05T00:03:13Z",
+  "generated_at": "2026-11-05T00:39:47Z",
   "notes": [
     "Artifacts are hashed as they exist in the working tree at generation time.",
     "The release signature is verified against the committed public key, not a trust root.",
@@ -77,14 +77,14 @@
     "signature_verified": true
   },
   "source": {
-    "commit": "1dab567ee461e3425d5f069f55a08cc99edd74f3",
+    "commit": "cfb1e641e87cfca39c34503c743c6e763434ccf5",
     "dirty": false
   },
   "tests": {
     "errors": 0,
     "failures": 0,
     "ok": true,
-    "ran": 112,
+    "ran": 144,
     "skipped": 0
   }
 }
