@@ -19,11 +19,11 @@ images:
   - name: slm/eval
     newName: ghcr.io/mahi80/slm-eval
     newTag: "0.5.0"
-    digest: sha256:137d10b44f2d235ef74e3d6f4797c09ea9f56ca7baeab92eda991262b30b7fd4
+    digest: sha256:b043595143d1ad4fafdf78911dd08b6561bf987ff7afd211a01d2d671213294b
   # The adapter loader reuses the gateway image for its stdlib-only client.
   # Component resources are transformed after the base, so this entry has to
   # repeat the pin the base applies to the deployments.
   - name: slm/gateway
     newName: ghcr.io/mahi80/slm-gateway
     newTag: "0.5.0"
-    digest: sha256:16759fe6fd4febc6d88509283cfe34f69fd29d3eaf0b3671911cf1a6f587ebdf
+    digest: sha256:9032483f7032dfa0d4cf7a5919e761fabd954523ac6f8672b60deb2dda209d8c
