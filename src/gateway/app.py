@@ -32,7 +32,14 @@ from router.policy import Candidate, Policy
 
 from . import metrics
 from .auth import TenantRegistry
-from .backends import BackendAccess, open_upstream, probe
+from .backends import (
+    REFRESHABLE_SOURCES,
+    BackendAccess,
+    CredentialError,
+    open_authenticated,
+    open_upstream,
+    probe,
+)
 from .config import Tenant, load_tenants
 
 POLICY_FILE = os.environ.get("POLICY_FILE", "/app/config/policy.yaml")
@@ -40,6 +47,8 @@ TENANTS_FILE = os.environ.get("TENANTS_FILE", "/app/config/tenants.yaml")
 AUDIT_FILE = os.environ.get("AUDIT_FILE", "/var/lib/slm/audit.jsonl")
 BACKEND_KEYS_FILE = os.environ.get("SLM_BACKEND_KEYS", "/app/backend-keys/keys.yaml")
 BACKEND_CA_FILE = os.environ.get("SLM_BACKEND_CA") or None
+# Rotating tokens live in SLM_BACKEND_TOKEN_DIR (read by BackendAccess.load),
+# default /app/backend-tokens, one file per `access.key` with source: file.
 PROBE_INTERVAL_S = float(os.environ.get("SLM_PROBE_INTERVAL_S", "30"))
 
 access = BackendAccess.load(BACKEND_KEYS_FILE, BACKEND_CA_FILE)
@@ -82,7 +91,17 @@ async def probe_external_backends(app: FastAPI) -> None:
                         alias.name, candidate.name, "unconfigured"
                     ).inc()
                     continue
-                healthy = await probe(app.state.client, candidate, access.headers(candidate))
+                try:
+                    headers = await access.headers(candidate, app.state.client)
+                    healthy = await probe(app.state.client, candidate, headers)
+                except CredentialError as exc:
+                    # The message names the key, never the secret. A credential
+                    # that cannot be obtained makes the backend unusable, which
+                    # is what a failed probe means too.
+                    logger.warning(
+                        "backend credential for %s/%s: %s", alias.name, candidate.name, exc
+                    )
+                    healthy = False
                 metrics.BACKEND_PROBE.labels(
                     alias.name, candidate.name, "up" if healthy else "down"
                 ).inc()
@@ -277,8 +296,9 @@ async def run_shadow(
     completion_tokens = 0
     started = time.perf_counter()
     try:
+        headers = await access.headers(candidate, client)
         response = await open_upstream(
-            client, candidate, payload, stream=False, headers=access.headers(candidate)
+            client, candidate, payload, stream=False, headers=headers
         )
         raw = await response.aread()
         await response.aclose()
@@ -292,6 +312,9 @@ async def run_shadow(
     except asyncio.CancelledError:
         status = "cancelled"
         raise
+    except CredentialError as exc:
+        status = "credential-error"
+        logger.warning("shadow credential for %s/%s: %s", alias, candidate.name, exc)
     except httpx.HTTPError:
         status = "error"
     finally:
@@ -618,17 +641,47 @@ async def chat_completions(
             last_error = f"{candidate.name}: circuit open"
             continue
         try:
-            upstream = await open_upstream(
+            upstream = await open_authenticated(
                 client,
                 candidate,
+                access,
                 dict(body, model=candidate.upstream_model),
                 stream,
-                headers=access.headers(candidate),
             )
+        except CredentialError as exc:
+            # A credential failure is a failure of this attempt, not of the
+            # request: record it in the breaker, log the key name and fall
+            # through to the next candidate.
+            store.breakers.record_failure(key)
+            update_breaker(alias, candidate.name)
+            logger.warning(
+                "backend credential for %s/%s: %s", alias, candidate.name, exc
+            )
+            last_error = f"{candidate.name}: {exc}"
+            upstream = None
+            continue
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
             store.breakers.record_failure(key)
             update_breaker(alias, candidate.name)
             last_error = f"{candidate.name}: {type(exc).__name__}"
+            upstream = None
+            continue
+        if upstream.status_code == 401 and candidate.access is not None and (
+            candidate.access.source in REFRESHABLE_SOURCES
+        ):
+            # open_authenticated already refreshed once and the upstream still
+            # refused the credential, so this is an authentication failure of
+            # the candidate, not a request the tenant can fix.
+            store.breakers.record_failure(key)
+            update_breaker(alias, candidate.name)
+            logger.warning(
+                "backend credential for %s/%s: HTTP 401 after refresh",
+                alias,
+                candidate.name,
+            )
+            last_error = f"{candidate.name}: HTTP 401 after credential refresh"
+            await upstream.aread()
+            await upstream.aclose()
             upstream = None
             continue
         if upstream.status_code >= 500:

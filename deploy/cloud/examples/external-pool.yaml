@@ -1,0 +1,34 @@
+# EXAMPLE ONLY — not referenced by any overlay or by config/capacity.yaml.
+#
+# The pool side of an external backend: a place work may land that this cluster
+# does not own. Copy the entry into config/capacity.yaml and replace the
+# endpoint with the provider's own. The validator rejects an external pool that
+# keeps a `workload`, a `node_pool`, an http:// endpoint or replica bounds, and
+# it rejects a candidate that names this pool without an `access` block.
+#
+# Pairs with policy-candidates.yaml in this directory.
+version: 2
+
+pools:
+  - name: cloud-prod
+    compute: gpu
+    deployment: cloud
+    external: true
+    # The provider that runs the endpoint. `modelled: false` says the hourly
+    # figure in the cost model is the provider's price, not an estimate.
+    provider: openai-compatible-saas
+    modelled: false
+    # https only, no userinfo, no query, no fragment. A path prefix is fine:
+    # the gateway appends /v1/chat/completions and /health.
+    endpoint: https://inference.provider.example
+    # No workload, no node_pool, no replicas: the machines are not ours.
+    metrics: []
+
+  - name: cloud-gpu-vllm
+    compute: gpu
+    deployment: cloud
+    external: true
+    provider: aws
+    modelled: false
+    endpoint: https://vllm.internal.example.com
+    metrics: []
