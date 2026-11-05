@@ -462,6 +462,50 @@ def s9(d, t, dur):
     d.text((900, 596), "one record per request", font=F_TINY, fill=col(MUTED, 0.9 * a2))
 
 
+def s_ops(d, t, dur):
+    kicker(d, "THE OTHER 80% · 5", GREEN)
+    title(d, ["Two pools. One health check."], y=124, size=48)
+    subtitle(d, ["Pin the GPU tier, keep the router off it, and prove it from the cluster."], y=196)
+
+    a = rv(t, 0.5)
+    panel(d, (90, 258, 600, 432), CYAN, a)
+    d.text((116, 274), "GPU pool", font=F_H3, fill=col(WHITE, a))
+    pill(d, 368, 268, "nvidia.com/gpu taint", CYAN, a)
+    d.rounded_rectangle((116, 318, 574, 408), radius=12, fill=col(CARD_2, 0.85 * a),
+                        outline=col(BORDER, 0.9 * a))
+    d.text((140, 334), "vllm-gpu", font=F_CARD, fill=col(WHITE, a))
+    d.text((140, 368), "nodeSelector · toleration · 1 GPU", font=F_CARD_S, fill=col(MUTED, a))
+
+    a2 = rv(t, 0.9)
+    panel(d, (680, 258, 1190, 432), AMBER, a2)
+    d.text((706, 274), "CPU pool", font=F_H3, fill=col(WHITE, a2))
+    pill(d, 878, 268, "slm.fabric/pool=cpu", AMBER, a2)
+    for i, (name, note) in enumerate((("gateway", "preferred affinity"),
+                                      ("tiersim-cpu · tiersim-cloud", "modelled tiers"))):
+        y = 318 + i * 46
+        d.rounded_rectangle((706, y, 1164, y + 38), radius=10, fill=col(CARD_2, 0.8 * a2),
+                            outline=col(BORDER, 0.9 * a2))
+        d.text((722, y + 9), name, font=F_CARD_S, fill=col(WHITE, a2))
+        d.text((1148, y + 10), note, font=F_TINY, fill=col(MUTED, a2), anchor="ra")
+
+    a3 = rv(t, 1.3)
+    d.text((640, 446), "preference keeps a single node schedulable; the taint does the enforcing",
+           font=F_TINY, fill=col(MUTED, 0.9 * a3), anchor="ma")
+
+    a4 = rv(t, 1.6)
+    panel(d, (90, 472, 1190, 630), GREEN, a4)
+    d.text((116, 486), "$ make cluster-health", font=F_URL, fill=col(GREEN, a4))
+    rows = [
+        "PASS  cluster       3 nodes ready",
+        "PASS  gpu-capacity  1 allocatable nvidia.com/gpu",
+        "PASS  endpoints     4/4 services have ready addresses",
+        "PASS  gateway       policy v3 · 0 breaker(s) open",
+    ]
+    for i, text in enumerate(rows):
+        aa = rv(t, 1.9 + i * 0.15)
+        d.text((116, 520 + i * 28), text, font=F_URL, fill=col(WHITE, 0.9 * aa))
+
+
 def s10(d, t, dur):
     a = rv(t, 0.3)
     d.text((W // 2, 150), "SLM SERVING FABRIC", font=font(SEGOE_BOLD, 72), fill=col(WHITE, a), anchor="ma")
@@ -469,7 +513,8 @@ def s10(d, t, dur):
            font=font(SEGOE_REG, 28), fill=col(MUTED, a), anchor="ma")
 
     a2 = rv(t, 0.6)
-    chips = ["signed releases", "digest-pinned images", "tenant isolation", "hash-chained audit"]
+    chips = ["signed releases", "digest-pinned images", "tenant isolation",
+             "hash-chained audit", "cluster health"]
     total = sum(d.textlength(c, font=F_CARD_S) + 44 for c in chips) + 16 * (len(chips) - 1)
     x = (W - total) // 2
     for c in chips:
@@ -518,6 +563,8 @@ SCENE_SPECS = [
          narration="Shipping a new model release through gates, canary and rollback, without a redeploy."),
     dict(key="audit", kicker="THE OTHER 80% · 4", accent=BLUE, draw=s9,
          narration="And proving to an auditor why every request went where it went."),
+    dict(key="ops", kicker="THE OTHER 80% · 5", accent=GREEN, draw=s_ops,
+         narration="In the cluster, the GPU tier is pinned to GPU nodes, everything else prefers CPU workers, and one command checks nodes, capacity, endpoints and breaker state."),
     dict(key="close", kicker="THE PLATFORM", accent=CYAN, draw=s10,
          narration="This repository builds that platform, and records every decision as a reviewable architecture decision record."),
 ]

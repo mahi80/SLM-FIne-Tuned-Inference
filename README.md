@@ -15,10 +15,11 @@ cluster overlays, and signed release manifests. Tests and validators are green i
 
 ## Watch it first
 
-75 seconds, from the customer problem to the four decisions a private LLM platform has to get
-right: tier routing, tenant isolation, release and audit.
+86 seconds, from the customer problem to the five decisions a private LLM platform has to get
+right: tier routing, tenant isolation, release, audit, and running it on a mixed CPU/GPU
+cluster.
 
-https://github.com/user-attachments/assets/3dd2821f-45c3-4473-a361-46caeabf3b47
+https://github.com/user-attachments/assets/76f6f3ff-0aeb-4a51-941e-50c34b7980a4
 
 ---
 
