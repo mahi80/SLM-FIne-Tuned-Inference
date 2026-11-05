@@ -77,5 +77,5 @@ GPU, and `make test` / `make release-check` run without a cluster.
 | Scope | 1–8B open-weight models, one fine-tuned task, three compute tiers |
 | Out of scope | frontier-model training, multi-tenant GPU sharing, real cloud deployment, UI |
 | Review state | self-assessed reference architecture; no external assessor |
-| Last review | 2026-11-05 — pack cross-checked against `b1bd4a0` (CI run `41955890300`); record in [acceptance.md](acceptance.md#sign-off-record) |
+| Last review | 2026-11-05 — pack cross-checked and signed off against `808c299` (CI run `41956686758`); record in [acceptance.md](acceptance.md#sign-off-record) |
 | Change rule | a release, policy or threat-model change re-runs `make signoff` and updates this pack |

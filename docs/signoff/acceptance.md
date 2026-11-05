@@ -26,7 +26,7 @@ Python 3.12, OpenSSL 3.5, `kubectl` v1.34.1, kind v0.33.0 on Docker Desktop.
 | A-13 | A signed release matches the deployment tree | `make release-check` | manifest signature verified; policy, image names, tags and digests, revision, adapter set and gate all agree | Measured |
 | A-14 | Secrets are not in Git; workloads are non-root with limits and probes | `make deploy-validate`, `tests/test_deploy.py` | no `Secret` objects rendered; 82 deployment tests pass | Static |
 | A-15 | Air gap removes internet egress and forces offline mode | `make deploy-validate` | model-download NetworkPolicy absent; `HF_HUB_OFFLINE=1` present | Static |
-| A-16 | CI runs the tests and both validators on a hosted runner | GitHub Actions run `41955890300` on `b1bd4a0` | unit tests, `validate_deploy`, `validate_release`, `registry verify` and `fleet_status --check` all passed | Measured (hosted), no cluster |
+| A-16 | CI runs the tests and both validators on a hosted runner | GitHub Actions run `41956686758` on `808c299` | unit tests, `validate_deploy`, `validate_release`, `registry verify` and `fleet_status --check` all passed; this sign-off record is committed after that run and changes no validated artifact | Measured (hosted), no cluster |
 | A-17 | The vanilla overlay runs on a real API server and kubelet | `kubectl kustomize --load-restrictor LoadRestrictionsNone deploy/kustomize/overlays/vanilla \| kubectl apply -f -`; kind v0.33.0, Kubernetes 1.34 | 25 objects applied; gateway and both tier simulators 1/1; GPU tier left unschedulable by a node taint; the first apply exposed a nested `subPath` mount on the tenants Secret, now fixed and covered by `check_mounts` | Measured on kind |
 | A-18 | Live routing follows residency and cloud permission through the cluster Service | `curl` to `svc/gateway` with tenant keys (port-forward) | acme (EU, confidential) → `x-tier: cpu`, `x-route-reason: policy:primary:cpu:fallback`, `x-fallback: true`; globex (US, internal) → `x-tier: cloud`, `policy:standby:cloud-us`; audit records `vetoed: ["gpu:breaker-open"]` | Measured on kind |
 | A-19 | The audit chain verifies against the PVC-backed file | `GET /v1/audit/verify` as admin | `{"ok": true, "records": 7, "last_seq": 7, ...}`; the file's last record hash equals the in-memory head | Measured on kind |
@@ -88,9 +88,10 @@ risk accepted for the reference build, not an oversight.
 |---|---|
 | Review type | Self-assessment against the role requirements |
 | Date | 2026-11-05 |
-| Reviewed tree | `b1bd4a0` — 362 tests green, CI run `41955890300`; release `slm-0.5.0` signature verified. `evidence.json` names `a3f265d`, identical to `b1bd4a0` except for the evidence file itself |
+| Status | **Signed off** as a reference architecture with conditions — not a production sign-off for a regulated tenant |
+| Reviewed tree | `808c299` — 362 tests green, CI run `41956686758`; release `slm-0.5.0` signature verified; [evidence.json](evidence.json) names `808c299` with `dirty: false` |
 | Scope | requirements, acceptance, risks, operations, release process, evidence, ADRs 0001–0013, README and technical notes |
-| Cross-checks | evidence hashes match the working tree; A-22 digests equal the signed manifest; R-16, R-17 and R-18 residuals remain open |
+| Cross-checks | evidence hashes match the working tree; A-22 digests equal the signed manifest; every relative link and anchor resolves; R-16, R-17 and R-18 residuals remain open |
 | Platform release | latest manifest under [`release/`](../../release) |
 | Evidence snapshot | [evidence.json](evidence.json) |
 | Decision | **Accepted as reference architecture, C-02 closed; C-01 and C-03 to C-10 open.** A-30 evidences a reviewed bring-up plan, not a provisioned cluster (N-14) |
