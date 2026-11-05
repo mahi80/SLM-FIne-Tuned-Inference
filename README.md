@@ -254,7 +254,7 @@ Full map: [repository map](docs/technical-notes.md#repository-map).
 | If you want | Read |
 |---|---|
 | Evidence, contracts and measurement detail | [docs/technical-notes.md](docs/technical-notes.md) |
-| Why each decision was made, phase by phase | [technical notes](docs/technical-notes.md#design-decisions-phase-by-phase), then [ADR-0001…0007](docs/adr/) |
+| Why each decision was made | [ADR-0001…0007](docs/adr/) — one record per choice |
 | Cluster deployment and air gap | [Kubernetes and OpenShift](docs/technical-notes.md#kubernetes-and-openshift) |
 | The release and review pack | [Signed releases](docs/technical-notes.md#signed-releases-and-the-review-pack), [docs/signoff/](docs/signoff/) |
 | What was not proven | [acceptance.md](docs/signoff/acceptance.md) — A-01…A-22, N-01…N-11, C-01…C-10 |
