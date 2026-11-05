@@ -5,11 +5,11 @@
     "bench/results/eval-gate.json": "9a4099b63ed005807ef9f5e19963a6bd76718e5663b741e974322e478e413f28",
     "bench/results/tier-comparison.json": "c76ce75ac07c4ba856a69a4555ff41ea16a8c0e3af15cbc535a7ef146be39e52",
     "compose.yaml": "e1c8212639e6d562fdf42d79b984fae1550a31b3e441ed7f3263447e77df23a7",
-    "config/capacity.yaml": "f4bd1dce882032175ecffd3c0311836a1fd312ba24c42d7a5d29025abdeef019",
+    "config/capacity.yaml": "6bbecf0b801a20e1ad1b576b0cbb54a8a182725f8338b6e90354ec66287194c5",
     "config/cost.yaml": "fc9bfb7777ae5b703732d9d9954f80d1026fdc1e226166e9104f1d61bc434622",
     "config/eval-gates.yaml": "50fee941f061743c74fd0ae2f8bb0511ee85cbf8f7be69d445ed19321ae2842e",
     "config/policy.yaml": "467738c0a97fabd53345fa43210b780a8ab3412eb4803f2dd6e0f400bbb2b6cc",
-    "config/release.yaml": "878963df02fb11e48f8c5acbd3eaddf53aa0710c63fb26b5f1aef2e029a118e8",
+    "config/release.yaml": "f855d297d78ad79fffe234e533c9a905732bfe207e9151aca0c0df8b2d23703f",
     "src/eval/golden.jsonl": "819c526a4406cb3a2a2b820fa535c3f7b8ad84aa10ea780abc3092a857acce39"
   },
   "environment": {
@@ -17,7 +17,7 @@
     "platform": "Windows-11-10.0.26200-SP0",
     "python": "3.12.10"
   },
-  "generated_at": "2026-11-05T01:19:57Z",
+  "generated_at": "2026-11-05T01:38:45Z",
   "notes": [
     "Artifacts are hashed as they exist in the working tree at generation time.",
     "The release signature is verified against the committed public key, not a trust root.",
@@ -34,7 +34,7 @@
         "sha256": "a459129539cf1573736a011ae172f6e2e88c24366e597d4c5828ce3ab4fca159"
       }
     ],
-    "canonical_sha256": "1fccfe19e243ae1b7c193130cbee22a5489aed715e9720d7beee7e87c468caa5",
+    "canonical_sha256": "363270718a0902d8354ec312f36c87d5d177ba53c536e02f93407150c087328d",
     "gate": {
       "checks_total": 13,
       "metrics": {
@@ -63,7 +63,7 @@
       "passed": true
     },
     "manifest": "release/slm-0.5.0.json",
-    "manifest_sha256": "50b4b1ebe55905fd7d5fe5ee7f7050af7d914603e24a68cf062f9095889d7f5a",
+    "manifest_sha256": "2588c9e3e434a6ac99f545fde6f8ebb225fef4a865fd48919dea7f3282982554",
     "model": {
       "base_id": "Qwen/Qwen3-4B-Instruct-2507",
       "id": "cyankiwi/Qwen3-4B-Instruct-2507-AWQ-4bit",
@@ -78,14 +78,14 @@
     "signature_verified": true
   },
   "source": {
-    "commit": "2b4d107759b165aabe3dcc691029bb027e38e7dd",
-    "dirty": false
+    "commit": "aaa20711456d05567883a7c9bbb7f71878535f39",
+    "dirty": true
   },
   "tests": {
     "errors": 0,
     "failures": 0,
     "ok": true,
-    "ran": 169,
+    "ran": 222,
     "skipped": 0
   }
 }
