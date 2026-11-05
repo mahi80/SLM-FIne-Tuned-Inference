@@ -33,6 +33,7 @@ class TenantView(Protocol):
     allowed_compute: tuple[str, ...]
     allowed_deployment: tuple[str, ...]
     allow_cloud: bool
+    latency_budget_ms: int
 
 
 @dataclass(frozen=True)
@@ -104,7 +105,12 @@ class PolicyEngine:
         self._backend_ready = backend_ready
 
     def _admit(
-        self, alias: str, candidate: Candidate, tenant: TenantView, required_tokens: int
+        self,
+        alias: str,
+        candidate: Candidate,
+        tenant: TenantView,
+        required_tokens: int,
+        latency_budget_ms: int = 0,
     ) -> tuple[bool, str]:
         if tenant.allowed_tiers and candidate.tier not in tenant.allowed_tiers:
             return False, "tier-denied"
@@ -123,6 +129,14 @@ class PolicyEngine:
             return False, "sovereignty-veto"
         if required_tokens > candidate.max_context:
             return False, "context-exceeded"
+        # A budget of 0 is no budget, and a candidate that declares no latency
+        # (0) cannot be shown to miss one: both stay admissible.
+        if (
+            latency_budget_ms > 0
+            and candidate.latency_ms > 0
+            and candidate.latency_ms > latency_budget_ms
+        ):
+            return False, "latency-budget-exceeded"
         state = self.breakers.state(breakers.key(alias, candidate.name))
         if state == breakers.OPEN:
             return False, "breaker-open"
@@ -144,6 +158,7 @@ class PolicyEngine:
         tenant: TenantView,
         request_id: str,
         required_tokens: int,
+        latency_budget_ms: int = 0,
     ) -> Decision:
         alias = self.policy.aliases[alias_name]
         canary = alias.canary
@@ -160,7 +175,9 @@ class PolicyEngine:
             if denied:
                 ok, reason = False, "alias-denied"
             else:
-                ok, reason = self._admit(alias_name, candidate, tenant, required_tokens)
+                ok, reason = self._admit(
+                    alias_name, candidate, tenant, required_tokens, latency_budget_ms
+                )
             considered.append(Verdict(candidate.name, ok, reason))
             if ok:
                 admitted[candidate.name] = candidate

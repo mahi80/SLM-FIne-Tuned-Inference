@@ -12,7 +12,13 @@
 #
 # GPU costs are 0.0 because the node is owned; CPU and cloud figures come from
 # the calibrated profiles in src/tiersim/profiles.py and are MODELLED.
-version: "2026-11-04.1"
+#
+# `latency_ms` restates the pool's `slo.expected_latency_ms` from
+# config/capacity.yaml so admission can compare one candidate against a tenant's
+# latency budget without reading a second file. The deploy validator fails if
+# the two ever disagree. Leaving it out means "not declared": such a candidate
+# is never vetoed on latency.
+version: "2026-11-05.1"
 
 breaker:
   failures: 3
@@ -36,6 +42,7 @@ aliases:
         priority: 0
         max_context: 8192
         cost_per_1k_out: 0.0
+        latency_ms: 900
         model_version: qwen3-4b-awq-2026-02
 
       - name: cpu
@@ -50,6 +57,7 @@ aliases:
         priority: 10
         max_context: 4096
         cost_per_1k_out: 0.0088
+        latency_ms: 2500
         model_version: qwen3-4b-q4-cpu
 
       - name: cloud-us
@@ -64,6 +72,7 @@ aliases:
         priority: 5
         max_context: 8192
         cost_per_1k_out: 0.00033
+        latency_ms: 1500
         model_version: qwen3-4b-awq-cloud
 
   # Direct alias for callers that want the CPU tier regardless of GPU health.
@@ -83,6 +92,7 @@ aliases:
         priority: 10
         max_context: 4096
         cost_per_1k_out: 0.0088
+        latency_ms: 2500
         model_version: qwen3-4b-q4-cpu
 
   # Release canary. v1 is the primary; v2 receives a deterministic slice of
@@ -112,6 +122,7 @@ aliases:
         priority: 0
         max_context: 8192
         cost_per_1k_out: 0.0
+        latency_ms: 900
         model_version: triage-v1
 
       - name: v2
@@ -126,6 +137,7 @@ aliases:
         priority: 1
         max_context: 8192
         cost_per_1k_out: 0.0
+        latency_ms: 900
         model_version: triage-v2
 
   # Pinned alias for callers and evals that must not receive canary traffic.
@@ -145,4 +157,5 @@ aliases:
         priority: 0
         max_context: 8192
         cost_per_1k_out: 0.0
+        latency_ms: 900
         model_version: triage-v2

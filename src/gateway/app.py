@@ -2,7 +2,8 @@
 
 Phase 3 replaced the static alias table with a policy engine:
 
-* admission (tenant, residency, data class, context budget) before scoring;
+* admission (tenant, residency, data class, context and latency budgets) before
+  scoring;
 * one primary per alias, deterministic canaries, standbys only when the
   primary is not admissible;
 * per-candidate circuit breakers, half-open probing, transport fallback;
@@ -245,6 +246,7 @@ def record(
             "candidate": candidate.name if candidate else None,
             "decision": decision.kind,
             "policy_version": decision.policy_version,
+            "latency_budget_ms": getattr(tenant, "latency_budget_ms", 0),
             "upstream_model": candidate.upstream_model if candidate else None,
             "model_version": candidate.model_version if candidate else None,
             "fallback": state["fallback"],
@@ -503,7 +505,13 @@ async def explain_policy(
         ) from None
     required_tokens = prompt_tokens + max(0, max_tokens)
     request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
-    decision = store.engine.decide(alias, tenant, request_id, required_tokens)
+    decision = store.engine.decide(
+        alias,
+        tenant,
+        request_id,
+        required_tokens,
+        getattr(tenant, "latency_budget_ms", 0),
+    )
     return {
         "tenant": tenant.id,
         "required_tokens": required_tokens,
@@ -584,7 +592,13 @@ async def chat_completions(
         raise HTTPException(status_code=400, detail="'max_tokens' must be an integer") from None
     required_tokens = prompt_tokens + max(0, max_tokens)
 
-    decision = store.engine.decide(alias, tenant, request_id, required_tokens)
+    decision = store.engine.decide(
+        alias,
+        tenant,
+        request_id,
+        required_tokens,
+        getattr(tenant, "latency_budget_ms", 0),
+    )
     metrics.ROUTE_DECISIONS.labels(alias, decision.kind).inc()
     for candidate in decision.attempts:
         update_breaker(alias, candidate.name)

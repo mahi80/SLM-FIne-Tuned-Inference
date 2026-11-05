@@ -83,6 +83,7 @@ class Candidate:
     max_context: int
     cost_per_1k_out: float
     model_version: str
+    latency_ms: int = 0
     access: Access | None = None
 
     @property
@@ -243,6 +244,7 @@ def _candidate(raw: dict, where: str) -> Candidate:
             "priority",
             "max_context",
             "cost_per_1k_out",
+            "latency_ms",
             "model_version",
             "access",
         },
@@ -268,6 +270,11 @@ def _candidate(raw: dict, where: str) -> Candidate:
     cost = float(raw.get("cost_per_1k_out", 0.0))
     if cost < 0:
         raise ValueError(f"{where}: cost_per_1k_out must be >= 0")
+    # 0 means "not declared" and stays admissible; a declared target must be a
+    # real number, because a tenant budget is compared against it.
+    latency_ms = int(raw.get("latency_ms") or 0)
+    if "latency_ms" in raw and latency_ms <= 0:
+        raise ValueError(f"{where}: latency_ms must be positive when declared")
     upstream_model = str(raw["upstream_model"])
     backend = str(raw["backend"]).rstrip("/")
     access = _access(raw["access"], where) if raw.get("access") is not None else None
@@ -287,6 +294,7 @@ def _candidate(raw: dict, where: str) -> Candidate:
         max_context=max_context,
         cost_per_1k_out=cost,
         model_version=str(raw.get("model_version", upstream_model)),
+        latency_ms=latency_ms,
         access=access,
     )
 

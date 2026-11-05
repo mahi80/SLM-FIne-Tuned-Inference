@@ -15,7 +15,20 @@
 #
 # Node-pool manifests for AWS, Azure, GCP and on-prem GPU workers live under
 # deploy/cloud/; each one applies the label and taint recorded per pool.
-version: 2
+#
+# `slo` declares the latency and cost a pool is admitted on, once per pool
+# instead of once per candidate:
+#   expected_latency_ms  the p95 total latency the pool is sized for, at the
+#                        concurrency the benchmarks record. A tenant latency
+#                        budget is compared against this declared target, not
+#                        against a live observation.
+#   cost_per_1k_out      marginal cost of one thousand output tokens in USD.
+#   cost_source          `measured` when hardware of that class was benchmarked
+#                        here; `modelled` when the figure comes from a calibrated
+#                        profile and no hardware of that class was measured.
+# A `modelled: true` pool is always `cost_source: modelled`; the validator
+# enforces that, and that every candidate repeats these numbers exactly.
+version: 3
 
 pools:
   - name: onprem-gpu
@@ -26,6 +39,14 @@ pools:
     modelled: false
     endpoint: http://vllm-gpu:8000
     workload: vllm-gpu
+
+    # Latency target from the committed GPU benchmarks (p50 509-569 ms across
+    # 1-12 clients; p95 sits under a second). Marginal cost is zero because the
+    # node is owned; ADR-0005 prices that ownership per token separately.
+    slo:
+      expected_latency_ms: 900
+      cost_per_1k_out: 0.0
+      cost_source: measured
 
     # A replica owns a whole GPU and reloads weights on start (minutes, not
     # seconds), so the floor is one warm replica and scale-up is one pod per
@@ -83,6 +104,13 @@ pools:
     endpoint: http://tiersim-cpu:8001
     workload: tiersim-cpu
 
+    # Modelled: the CPU profile is a calibrated simulator (4.2 s p50 total at
+    # 12 clients), so both numbers come from src/tiersim/profiles.py.
+    slo:
+      expected_latency_ms: 2500
+      cost_per_1k_out: 0.0088
+      cost_source: modelled
+
     # CPU capacity here is cheap enough to keep warm and predictable. Scaling
     # it would need its own latency SLO; until then a fixed replica is honest.
     replicas:
@@ -107,6 +135,14 @@ pools:
     modelled: true
     endpoint: http://tiersim-cloud:8001
     workload: tiersim-cloud
+
+    # Modelled: the L4 reference profile, not a provider bill. When this pool
+    # becomes a real external endpoint, cost_source becomes whatever the
+    # provider invoices and the numbers are re-measured before that edit.
+    slo:
+      expected_latency_ms: 1500
+      cost_per_1k_out: 0.00033
+      cost_source: modelled
 
     # The external-backend path is implemented (Stage 2) but this pool stays a
     # simulator: the route is in-cluster, unauthenticated and not TLS. Pointing
