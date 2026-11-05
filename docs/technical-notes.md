@@ -97,9 +97,9 @@ leaves the application failed and un-promoted.
 
 ```text
 $ python tools/validate_deploy.py
-OK   openshift: 32 objects
+OK   openshift: 33 objects
 OK   vanilla: 25 objects
-OK   airgap: 31 objects
+OK   airgap: 32 objects
 ```
 
 The validator is the review artifact. It re-renders the overlays and checks:
@@ -112,7 +112,56 @@ The validator is the review artifact. It re-renders the overlays and checks:
 - no Secret material, no host namespaces, no `latest` tags, and a single `Recreate`
   gateway because quota, breaker and audit state are in-process;
 - the overlay actually exposes what it claims: a Route or Ingress for the gateway, a
-  ServiceMonitor and scrape policy on OpenShift, offline env in the air gap.
+  ServiceMonitor and scrape policy on OpenShift, offline env in the air gap, and the five
+  platform alerts on every overlay that installs the Prometheus Operator.
+
+**Two node pools.** The GPU tier is hard-pinned: it selects `nvidia.com/gpu.present=true`
+and tolerates the `nvidia.com/gpu:NoSchedule` taint the GPU Operator applies. The gateway
+and both simulators are different — they must run where a GPU is not being wasted, but a
+single-node kind cluster has no separate pool. So `components/cpu-placement` adds a
+*preferred* `slm.fabric/pool=cpu` affinity plus a toleration for a `slm.fabric/pool=cpu`
+taint. Preference never blocks scheduling; the taint is what enforces separation once you
+add the second pool:
+
+```bash
+# CPU pool (gateway, tiersim-cpu, tiersim-cloud)
+kubectl label node <cpu-node> slm.fabric/pool=cpu
+kubectl taint node <cpu-node> slm.fabric/pool=cpu:NoSchedule
+
+# GPU pool: the Operator labels these; on plain Kubernetes label them by hand
+kubectl label node <gpu-node> nvidia.com/gpu.present=true
+```
+
+The placement rules are asserted by the validator and by six tests, so an overlay that
+loses its toleration fails review rather than silently filling the GPU nodes with simulators.
+
+**Is the cluster healthy?** Static checks prove what will be created; they cannot see a
+CrashLoop or a drained GPU node. `make cluster-health` reads the live cluster through the
+same kubeconfig and reports PASS/WARN/FAIL for nodes, GPU capacity, Deployment availability,
+endpoints, the policy ConfigMap and the gateway's own health payload:
+
+```text
+$ make cluster-health
+PASS cluster     Kubernetes v1.33.1, 3 nodes ready
+PASS gpu-capacity 1 allocatable nvidia.com/gpu on 1 node
+PASS deployments gateway, tiersim-cloud, tiersim-cpu, vllm-gpu available
+PASS endpoints   gateway, tiersim-cloud, tiersim-cpu, vllm-gpu have ready addresses
+PASS policy      policy_version 3 matches ConfigMap slm-policy-6f2c9
+PASS gateway     status ok, 4 alias(es), 0 breaker(s) open
+```
+
+`--allow-no-gpu` downgrades vLLM-tier findings to warnings (for kind and CPU-only test
+clusters). `--json` emits the same result for CI. The gateway URL is reached through the
+API-server service proxy, so no port-forward is needed; `--gateway-url` plus `--api-key`
+enable the tenant-level `/v1/policy` and `/v1/audit/verify` checks against a real Route,
+with the key taken from `SLM_API_KEY` so it stays out of shell history and process listings.
+
+Five alerts ship in `PrometheusRule/slm-fabric`: `SlmGatewayUnavailable` (routing stopped),
+`SlmGpuTierUnavailable` (router should be failing over), `SlmNoGpuCapacity` (no node
+advertises a GPU), `SlmBreakerOpen` (a candidate has been failing for five minutes) and
+`SlmPodRestartLoop`. The first and fourth are separated because they need different first
+actions: one is a restart-and-inspect, the other is a backend problem the router is already
+compensating for.
 
 **Air gap.** Mirror the images with `deploy/openshift/airgap/mirror.sh`, apply the
 cluster-scoped `IDMS`/`ITMS` objects with `kubectl apply -k deploy/openshift/airgap`, point
@@ -132,7 +181,7 @@ public GHCR packages built by CI, and the upstream vLLM digest is recorded in th
 manifest. No cluster has pulled the GHCR images yet, so their registry-to-kubelet path is
 still unproven. PVCs rely on the cluster default storage class, and the gateway is
 deliberately one replica. The full rationale is in
-[ADR-0006](adr/ADR-0006-deployment-gitops.md); the observed rows are A-17 to A-22 in
+[ADR-0006](adr/ADR-0006-deployment-gitops.md); the observed rows are A-17 to A-23 in
 the [acceptance pack](signoff/acceptance.md).
 
 ---
@@ -181,7 +230,7 @@ The review pack answers the questions a reviewer actually asks, in order:
 |---|---|
 | [requirements.md](signoff/requirements.md) | What was asked, requirement by requirement, and which ones are not met |
 | [c4.md](architecture/c4.md) | What the system is: L1–L4 views, runtime sequence, trust boundaries |
-| [acceptance.md](signoff/acceptance.md) | What was verified (A-01…A-22), what was not (N-01…N-11), and the conditions (C-01…C-10) |
+| [acceptance.md](signoff/acceptance.md) | What was verified (A-01…A-23), what was not (N-01…N-11), and the conditions (C-01…C-10) |
 | [threat-model.md](signoff/threat-model.md) | What can go wrong, by asset, actor and entry point |
 | [risks.md](signoff/risks.md) | Which risks are accepted, with anchors into the code |
 | [operations.md](signoff/operations.md) | How it runs: SLOs, alerts, runbooks, backups |

@@ -111,13 +111,13 @@ Three properties from earlier phases made the deployment design non-obvious:
 
 ### Verified here
 
-- Three overlays render with `kubectl kustomize` (v5.7.1): 32 objects for OpenShift,
+- Three overlays render with `kubectl kustomize` (v5.7.1): 33 objects for OpenShift,
   25 for vanilla, 31 for air-gap (the model-download policy is deleted).
 - `python tools/validate_deploy.py` passes all three: image pins, model revision, security
   contexts, resources, probes, Service/policy wiring, ConfigMap equality, single-replica
   gateway, no Secrets, namespace placement, overlay-specific exposure.
-- 22 deployment tests (synthetic negative cases plus rendered-overlay integration); the
-  full suite is 112 tests.
+- 34 deployment tests (synthetic negative cases plus rendered-overlay integration); the
+  full suite is 144 tests.
 - A kind v0.33.0 cluster applied the vanilla overlay (25 objects, gateway and both
   simulators running), evaluated the Kyverno policies in Enforce, and reconciled the
   policies Application with self-heal. That pass found a nested `subPath` mount that static

@@ -1,0 +1,77 @@
+# Alerts for the platform as deployed. Prometheus Operator picks this up from
+# the monitored namespace (OpenShift user-workload monitoring, or
+# kube-prometheus-stack on vanilla — apply the file once that CRD exists).
+#
+# The gateway is a single writer, so "no available replica" means routing has
+# stopped entirely; a GPU outage is different, because the router keeps serving
+# from an admissible standby. The two are separated on purpose.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: slm-fabric
+  labels:
+    app.kubernetes.io/part-of: slm-fabric
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+spec:
+  groups:
+    - name: slm-fabric.platform
+      rules:
+        - alert: SlmGatewayUnavailable
+          expr: kube_deployment_status_replicas_available{namespace="slm-fabric",deployment="gateway"} < 1
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: The router has no available replica
+            description: >-
+              Requests cannot be routed. Quotas, breaker state and the audit chain
+              live in the gateway process, so there is no second replica to absorb
+              this; restart the Deployment and check its PersistentVolumeClaim.
+
+        - alert: SlmGpuTierUnavailable
+          expr: kube_deployment_status_replicas_available{namespace="slm-fabric",deployment="vllm-gpu"} < 1
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: The GPU tier has been unavailable for 15 minutes
+            description: >-
+              vLLM is not serving. The router should be failing over to an
+              admissible standby; check x-route-reason and the breaker state
+              before assuming requests are unaffected.
+
+        - alert: SlmNoGpuCapacity
+          expr: sum(kube_node_status_allocatable{resource="nvidia_com_gpu"}) < 1
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: No node advertises nvidia.com/gpu
+            description: >-
+              The GPU Operator or device plugin is not reporting capacity. The
+              GPU tier cannot be scheduled; the CPU and cloud tiers are the only
+              admissible backends.
+
+        - alert: SlmBreakerOpen
+          expr: gateway_breaker_state == 2
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: A router breaker has been open for 5 minutes
+            description: >-
+              The named alias:candidate has failed repeatedly. Traffic follows
+              the standby path; half-open admits one probe, so recovery does not
+              stampede a starting backend.
+
+        - alert: SlmPodRestartLoop
+          expr: increase(kube_pod_container_status_restarts_total{namespace="slm-fabric"}[15m]) > 2
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: A platform container is restarting repeatedly
+            description: >-
+              More than two restarts in fifteen minutes in the slm-fabric
+              namespace. Read the previous container log before the pod rotates.

@@ -7,11 +7,13 @@ resources:
   - ../../base
   - route.yaml
   - servicemonitor.yaml
+  - prometheusrule.yaml
   - networkpolicy-monitoring.yaml
 
 components:
   - ../../components/model-download
   - ../../components/release-gate
+  - ../../components/cpu-placement
 
 patches:
   # Enable user-workload monitoring for this namespace so the ServiceMonitor

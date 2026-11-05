@@ -21,9 +21,11 @@ scheduled. A pod restart is brief downtime, not a rolling upgrade.
 
 ## Signals and alerts
 
-Metrics come from the gateway (`gateway_*`), the simulators and vLLM. All alerts below are
-PromQL against the provisioned Prometheus; the dashboard **SLM Serving Fabric** already plots
-the first seven series.
+Metrics come from the gateway (`gateway_*`), the simulators and vLLM. The table below is the
+proposed expression set for the drill harness; the five rules actually shipped to a cluster
+are listed separately under [Shipped alerts](#shipped-alerts), because they depend only on
+kube-state-metrics and are the ones a Prometheus Operator installs on reconcile. The
+dashboard **SLM Serving Fabric** plots the first seven series.
 
 | Alert | Expression | For | Meaning | Runbook |
 |---|---|---|---|---|
@@ -40,6 +42,26 @@ the first seven series.
 
 The audit check is not a metric today; it is a probe the operator or an external monitor
 calls. That is deliberate honesty in the table above, not an omission to paper over.
+
+### Shipped alerts
+
+`deploy/kustomize/overlays/openshift/prometheusrule.yaml` renders as
+`PrometheusRule/slm-fabric` in the OpenShift and air-gap overlays. Vanilla clusters have no
+Operator CRDs; apply the same rules once kube-prometheus-stack is installed. The validator
+fails if any of the five is dropped, or if a rule loses its `for` window or severity.
+
+| Alert | Expression | For | Severity | Meaning | Runbook |
+|---|---|---|---|---|---|
+| `SlmGatewayUnavailable` | `kube_deployment_status_replicas_available{namespace="slm-fabric",deployment="gateway"} < 1` | 2m | critical | Routing has stopped; there is no second replica | RB-10 |
+| `SlmGpuTierUnavailable` | `kube_deployment_status_replicas_available{namespace="slm-fabric",deployment="vllm-gpu"} < 1` | 15m | warning | The router should be on a standby | RB-01 |
+| `SlmNoGpuCapacity` | `sum(kube_node_status_allocatable{resource="nvidia_com_gpu"}) < 1` | 15m | critical | No node advertises a GPU; the tier cannot schedule | RB-01 |
+| `SlmBreakerOpen` | `gateway_breaker_state == 2` | 5m | warning | One candidate has been failing; half-open probes are in flight | RB-02 |
+| `SlmPodRestartLoop` | `increase(kube_pod_container_status_restarts_total{namespace="slm-fabric"}[15m]) > 2` | 5m | warning | A platform container is restarting repeatedly | RB-11 |
+
+The first and fourth are separate on purpose: `SlmGatewayUnavailable` means stop the bleeding
+and inspect the process, while `SlmBreakerOpen` means the router is already doing its job and
+the problem is behind it. For a first look, `make cluster-health` reports the same signals
+without waiting for a rule to fire.
 
 ## Runbooks
 
@@ -172,6 +194,33 @@ green.
    tokens, but a misconfiguration can raise it.
 4. If the load exceeds the owned node, the cost model's break-even (~56k requests/day vs the
    cloud L4 profile) is the decision input — not an ad-hoc cloud enablement.
+
+### RB-10 — Gateway has no available replica
+
+**Signal:** `SlmGatewayUnavailable`; `make cluster-health` reports the gateway deployment
+unavailable. Every request fails, regardless of tier health.
+
+1. `kubectl -n slm-fabric describe pod -l app.kubernetes.io/name=gateway` — the usual causes
+   are a failed tenants Secret mount, a full or unbound audit PVC, or a rejected policy file.
+2. Do not scale the Deployment to get past it. Quota, breaker and audit state are in-process;
+   a second replica partitions them (ADR-0006).
+3. If the audit chain refuses to start, follow RB-04 before restarting again; repeated
+   restarts only rotate evidence.
+4. Confirm recovery with `make cluster-health` (gateway PASS and policy version matches the
+   ConfigMap), then verify the chain over the PVC-backed file.
+
+### RB-11 — Container restart loop
+
+**Signal:** `SlmPodRestartLoop`, or `make cluster-health` reporting restarts above five.
+
+1. Read the previous log first: `kubectl -n slm-fabric logs <pod> --previous`. A pod that
+   restarts every few minutes loses its last log with it.
+2. Distinguish probe-driven restarts (liveness threshold too tight under load) from crashes
+   (OOMKilled, image pull, config parse). `kubectl describe pod` shows the last state and
+   exit code.
+3. Do not raise limits to silence an OOM without checking the cause: a runaway request that
+   exhausts the gateway is a memory bug, and a larger limit only lengthens the outage.
+4. Record the restart window; audit records before the last restart are still on the PVC.
 
 ## Backup and restore
 

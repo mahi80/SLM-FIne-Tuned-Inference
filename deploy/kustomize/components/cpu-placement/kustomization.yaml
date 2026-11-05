@@ -1,0 +1,80 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+# Steer the control plane and the modelled tiers towards CPU workers.
+#
+# This is preferred affinity, not a required nodeSelector, so a single-node
+# kind cluster with no `slm.fabric/pool` label still schedules. Separation is
+# enforced by taints, not by hope: taint the GPU pool with
+# `nvidia.com/gpu=present:NoSchedule` (vLLM already tolerates it) and, if CPU
+# workers should stay free of other tenants' pods, taint them with
+# `slm.fabric/pool=cpu:NoSchedule` — the toleration below admits this platform.
+patches:
+  - target:
+      kind: Deployment
+      name: gateway
+    patch: |-
+      - op: add
+        path: /spec/template/spec/affinity
+        value:
+          nodeAffinity:
+            preferredDuringSchedulingIgnoredDuringExecution:
+              - weight: 100
+                preference:
+                  matchExpressions:
+                    - key: slm.fabric/pool
+                      operator: In
+                      values: ["cpu"]
+      - op: add
+        path: /spec/template/spec/tolerations
+        value:
+          - key: slm.fabric/pool
+            operator: Equal
+            value: "cpu"
+            effect: NoSchedule
+
+  - target:
+      kind: Deployment
+      name: tiersim-cpu
+    patch: |-
+      - op: add
+        path: /spec/template/spec/affinity
+        value:
+          nodeAffinity:
+            preferredDuringSchedulingIgnoredDuringExecution:
+              - weight: 100
+                preference:
+                  matchExpressions:
+                    - key: slm.fabric/pool
+                      operator: In
+                      values: ["cpu"]
+      - op: add
+        path: /spec/template/spec/tolerations
+        value:
+          - key: slm.fabric/pool
+            operator: Equal
+            value: "cpu"
+            effect: NoSchedule
+
+  - target:
+      kind: Deployment
+      name: tiersim-cloud
+    patch: |-
+      - op: add
+        path: /spec/template/spec/affinity
+        value:
+          nodeAffinity:
+            preferredDuringSchedulingIgnoredDuringExecution:
+              - weight: 100
+                preference:
+                  matchExpressions:
+                    - key: slm.fabric/pool
+                      operator: In
+                      values: ["cpu"]
+      - op: add
+        path: /spec/template/spec/tolerations
+        value:
+          - key: slm.fabric/pool
+            operator: Equal
+            value: "cpu"
+            effect: NoSchedule

@@ -175,6 +175,127 @@ class ResourceChecks(unittest.TestCase):
         self.assertTrue(any("GPU request" in error for error in errors))
 
 
+def placed_deployment(name):
+    """A deployment that satisfies the node-placement rules."""
+    doc = deployment(name=name)
+    spec = doc["spec"]["template"]["spec"]
+    if name == "vllm-gpu":
+        spec["nodeSelector"] = {"nvidia.com/gpu.present": "true"}
+        spec["tolerations"] = [
+            {"key": "nvidia.com/gpu", "operator": "Exists", "effect": "NoSchedule"}
+        ]
+    else:
+        spec["affinity"] = {
+            "nodeAffinity": {
+                "preferredDuringSchedulingIgnoredDuringExecution": [
+                    {
+                        "weight": 100,
+                        "preference": {
+                            "matchExpressions": [
+                                {"key": "slm.fabric/pool", "operator": "In", "values": ["cpu"]}
+                            ]
+                        },
+                    }
+                ]
+            }
+        }
+        spec["tolerations"] = [
+            {"key": "slm.fabric/pool", "operator": "Equal", "value": "cpu", "effect": "NoSchedule"}
+        ]
+    return doc
+
+
+class PlacementChecks(unittest.TestCase):
+    def test_placed_workloads_pass(self):
+        docs = [
+            placed_deployment("vllm-gpu"),
+            placed_deployment("gateway"),
+            placed_deployment("tiersim-cpu"),
+            placed_deployment("tiersim-cloud"),
+        ]
+        self.assertEqual(vd.check_placement(docs), [])
+
+    def test_gpu_tier_must_select_gpu_nodes(self):
+        doc = placed_deployment("vllm-gpu")
+        doc["spec"]["template"]["spec"].pop("nodeSelector")
+        errors = vd.check_placement([doc])
+        self.assertTrue(any("select GPU nodes" in error for error in errors))
+
+    def test_gpu_tier_must_tolerate_gpu_taint(self):
+        doc = placed_deployment("vllm-gpu")
+        doc["spec"]["template"]["spec"].pop("tolerations")
+        errors = vd.check_placement([doc])
+        self.assertTrue(any("nvidia.com/gpu taint" in error for error in errors))
+
+    def test_cpu_tier_must_prefer_the_cpu_pool(self):
+        doc = placed_deployment("tiersim-cpu")
+        doc["spec"]["template"]["spec"].pop("affinity")
+        errors = vd.check_placement([doc])
+        self.assertTrue(any("does not prefer slm.fabric/pool=cpu" in error for error in errors))
+
+    def test_cpu_tier_must_tolerate_the_cpu_taint(self):
+        doc = placed_deployment("tiersim-cloud")
+        doc["spec"]["template"]["spec"].pop("tolerations")
+        errors = vd.check_placement([doc])
+        self.assertTrue(any("slm.fabric/pool taint" in error for error in errors))
+
+    def test_wrong_pool_does_not_count(self):
+        doc = placed_deployment("gateway")
+        expressions = doc["spec"]["template"]["spec"]["affinity"]["nodeAffinity"][
+            "preferredDuringSchedulingIgnoredDuringExecution"
+        ][0]["preference"]["matchExpressions"]
+        expressions[0]["values"] = ["system"]
+        errors = vd.check_placement([doc])
+        self.assertTrue(any("does not prefer" in error for error in errors))
+
+
+class AlertChecks(unittest.TestCase):
+    @staticmethod
+    def rule(*alerts):
+        return {
+            "apiVersion": "monitoring.coreos.com/v1",
+            "kind": "PrometheusRule",
+            "metadata": {"name": "slm-fabric", "namespace": "slm-fabric"},
+            "spec": {
+                "groups": [
+                    {
+                        "name": "slm-fabric.platform",
+                        "rules": [
+                            {
+                                "alert": name,
+                                "expr": "up == 0",
+                                "for": "5m",
+                                "labels": {"severity": "warning"},
+                            }
+                            for name in alerts
+                        ],
+                    }
+                ]
+            },
+        }
+
+    def test_all_platform_alerts_are_required(self):
+        errors = vd.check_alerts([self.rule("SlmGatewayUnavailable")])
+        self.assertTrue(any("SlmBreakerOpen" in error for error in errors))
+
+    def test_complete_rule_set_passes(self):
+        alerts = sorted(vd.REQUIRED_ALERTS)
+        self.assertEqual(vd.check_alerts([self.rule(*alerts)]), [])
+
+    def test_missing_prometheusrule_is_an_error(self):
+        errors = vd.check_alerts([])
+        self.assertTrue(any("no PrometheusRule" in error for error in errors))
+
+    def test_unrouted_alert_is_rejected(self):
+        doc = self.rule(*vd.REQUIRED_ALERTS)
+        rules = doc["spec"]["groups"][0]["rules"]
+        rules[0]["labels"] = {}
+        rules[1]["for"] = ""
+        errors = vd.check_alerts([doc])
+        self.assertTrue(any("no warning/critical severity" in error for error in errors))
+        self.assertTrue(any("no for duration" in error for error in errors))
+
+
 class WiringChecks(unittest.TestCase):
     def test_policy_backends_must_have_services(self):
         policy_text = (
@@ -267,6 +388,16 @@ class RenderedOverlays(unittest.TestCase):
             d for d in docs if d.get("kind") == "ConfigMap" and str(d["metadata"]["name"]).startswith("slm-policy")
         )
         self.assertEqual(configmap["data"]["policy.yaml"].strip(), expected)
+
+    def test_platform_alerts_ship_with_operator_overlays(self):
+        for overlay in ("openshift", "airgap"):
+            with self.subTest(overlay=overlay):
+                self.assertEqual(vd.check_alerts(vd.render_overlay(overlay)), [])
+
+    def test_vanilla_has_no_operator_custom_resources(self):
+        kinds = {doc.get("kind") for doc in vd.render_overlay("vanilla")}
+        self.assertNotIn("PrometheusRule", kinds)
+        self.assertNotIn("ServiceMonitor", kinds)
 
 
 if __name__ == "__main__":

@@ -92,7 +92,7 @@ Three constraints shaped the answer:
 - `python -m tools.validate_release`: `OK release slm-0.5.0 = signed manifest = 3 overlays`.
 - Drift tests: an image tag or digest, model revision, served name, adapter name, policy
   digest, gate model or compose revision that differs from the manifest is rejected.
-- 41 registry/release tests and 112 total unit tests pass without a cluster or GPU.
+- 41 registry/release tests and 144 total unit tests pass without a cluster or GPU.
 
 **Costs accepted**
 

@@ -135,13 +135,14 @@ More detail: `python scripts/doctor.py` names the exact fix for each FAIL.
 
 ```bash
 make logs          # follow all services
-make test          # 112 unit tests, no GPU or cluster needed
+make test          # 144 unit tests, no GPU or cluster needed
 make smoke-policy  # admission, residency veto, canary stability, audit chain
 make adapter-train # QLoRA v1/v2, then hot-load them (~25 min of GPU)
 make bench         # tier benchmark matrix
 make eval-gate     # golden-set release gate
 make cost          # ownership cost per 1M output tokens
 make release-check # manifest = policy = adapters = overlays = compose
+make cluster-health # live cluster: nodes, GPU capacity, endpoints, gateway health
 make signoff       # tests, both validators, signature; rewrites evidence.json
 ```
 
@@ -257,7 +258,7 @@ Full map: [repository map](docs/technical-notes.md#repository-map).
 | Why each decision was made | [ADR-0001…0007](docs/adr/) — one record per choice |
 | Cluster deployment and air gap | [Kubernetes and OpenShift](docs/technical-notes.md#kubernetes-and-openshift) |
 | The release and review pack | [Signed releases](docs/technical-notes.md#signed-releases-and-the-review-pack), [docs/signoff/](docs/signoff/) |
-| What was not proven | [acceptance.md](docs/signoff/acceptance.md) — A-01…A-22, N-01…N-11, C-01…C-10 |
+| What was not proven | [acceptance.md](docs/signoff/acceptance.md) — A-01…A-23, N-01…N-11, C-01…C-10 |
 
 ---
 

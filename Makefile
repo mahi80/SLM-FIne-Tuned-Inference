@@ -6,7 +6,7 @@ DC := docker compose
 .PHONY: help env doctor gpu-check build up down logs ps test smoke smoke-gateway smoke-policy metrics health health-gateway clean \
         adapter-data adapter-train adapters adapter-eval adapter-smoke \
         bench eval-baseline eval-gate cost \
-        deploy-images deploy-render deploy-validate deploy-secret \
+        deploy-images deploy-render deploy-validate deploy-secret cluster-health \
         release-key release-build release-sign release-verify release release-check signoff
 
 help: ## Show available targets
@@ -88,6 +88,9 @@ deploy-secret: ## Create the tenant Secret from the gitignored local file
 	kubectl -n slm-fabric create secret generic slm-tenants \
 		--from-file=tenants.yaml=config/tenants.yaml \
 		--dry-run=client -o yaml | kubectl apply -f -
+
+cluster-health: ## Check nodes, GPU capacity, endpoints and gateway health in a cluster
+	python scripts/cluster_health.py
 
 release-key: ## Generate the Ed25519 release signing keypair (private key is gitignored)
 	PYTHONPATH=src python -m registry keygen

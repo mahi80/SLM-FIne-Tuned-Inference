@@ -135,7 +135,7 @@ the single replica is the honest design.
 
 ### R-09 — No live OpenShift validation
 
-**What exists.** Three overlays render and pass 60+ static assertions; 22 deployment tests
+**What exists.** Three overlays render and pass 60+ static assertions; 34 deployment tests
 cover the failure modes that matter; Kyverno policies and Argo CD applications are committed.
 A kind v0.33.0 cluster then applied the vanilla overlay, admitted and rejected pods through
 Kyverno v1.19.2, reconciled two Applications with Argo CD v3.6.1, and found one real defect
@@ -143,7 +143,9 @@ Kyverno v1.19.2, reconciled two Applications with Argo CD v3.6.1, and found one 
 
 **Residual.** No OpenShift instance evaluated SCC assignment, Route TLS, ServiceMonitor
 discovery, release hooks or the air-gap mirror path. kind's CNI does not enforce
-NetworkPolicy and has no ingress controller, so those paths are still unobserved.
+NetworkPolicy and has no ingress controller, so those paths are still unobserved. The new
+`make cluster-health` checker is unit tested and was exercised only through its no-cluster
+failure path; a healthy run against two tainted node pools is part of C-01.
 
 **Closure.** Execute C-01 on a real cluster and attach the outputs to this pack. Until then,
 every OpenShift-specific claim stays marked *static*.

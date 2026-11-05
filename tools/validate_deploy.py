@@ -13,6 +13,10 @@ What it protects, in order of how expensive the mistake is:
   * no Secret material is in Git, and no workload can reach the host;
   * every container declares resources and every long-running workload has a
     readiness probe;
+  * the GPU tier is pinned to GPU nodes and the remaining workloads prefer a
+    tainted CPU pool, so simulators cannot consume GPU capacity;
+  * the five platform alerts exist on every overlay that installs the
+    Prometheus Operator, each with a window and a severity;
   * the gateway is a single replica, because its quota, breaker and audit state
     is in-process.
 """
@@ -74,6 +78,18 @@ REQUIRED_SERVICES = {"vllm-gpu", "gateway", "tiersim-cpu", "tiersim-cloud"}
 GPU_LABEL = "slm.fabric/tier"
 VLLM_LABEL = "app.kubernetes.io/name"
 READ_ONLY_EXEMPT = {"vllm-gpu"}
+GPU_NODE_LABEL = "nvidia.com/gpu.present"
+GPU_TAINT = "nvidia.com/gpu"
+CPU_POOL_LABEL = "slm.fabric/pool"
+CPU_POOL_VALUE = "cpu"
+CPU_DEPLOYMENTS = ("gateway", "tiersim-cpu", "tiersim-cloud")
+REQUIRED_ALERTS = {
+    "SlmGatewayUnavailable",
+    "SlmGpuTierUnavailable",
+    "SlmNoGpuCapacity",
+    "SlmBreakerOpen",
+    "SlmPodRestartLoop",
+}
 
 
 def load_documents(text: str) -> list[dict]:
@@ -271,6 +287,53 @@ def check_mounts(docs: list[dict]) -> list[str]:
     return errors
 
 
+def tolerates(spec: dict, key: str) -> bool:
+    return any(term.get("key") == key for term in spec.get("tolerations") or [])
+
+
+def check_placement(docs: list[dict]) -> list[str]:
+    """The GPU tier must be pinned to GPU nodes; everything else must prefer the
+    CPU pool. Affinity is preferred rather than required so a single-node kind
+    cluster without the pool label still schedules; the taints do the enforcing.
+    """
+    errors = []
+    vllm = find(docs, "Deployment", "vllm-gpu")
+    if vllm is None:
+        errors.append("missing Deployment/vllm-gpu")
+    else:
+        spec = pod_spec(vllm)
+        if (spec.get("nodeSelector") or {}).get(GPU_NODE_LABEL) != "true":
+            errors.append(f"Deployment/vllm-gpu does not select GPU nodes ({GPU_NODE_LABEL}=true)")
+        if not tolerates(spec, GPU_TAINT):
+            errors.append(f"Deployment/vllm-gpu does not tolerate the {GPU_TAINT} taint")
+
+    for name in CPU_DEPLOYMENTS:
+        deployment = find(docs, "Deployment", name)
+        if deployment is None:
+            continue
+        spec = pod_spec(deployment)
+        affinity = spec.get("affinity") or {}
+        terms = (
+            (affinity.get("nodeAffinity") or {}).get(
+                "preferredDuringSchedulingIgnoredDuringExecution"
+            )
+            or []
+        )
+        prefers_cpu = any(
+            expression.get("key") == CPU_POOL_LABEL
+            and expression.get("operator") == "In"
+            and CPU_POOL_VALUE in (expression.get("values") or [])
+            for term in terms
+            for expression in (term.get("preference") or {}).get("matchExpressions") or []
+        )
+        if not prefers_cpu:
+            errors.append(f"Deployment/{name} does not prefer {CPU_POOL_LABEL}={CPU_POOL_VALUE}")
+        if not tolerates(spec, CPU_POOL_LABEL):
+            errors.append(f"Deployment/{name} does not tolerate the {CPU_POOL_LABEL} taint")
+
+    return errors
+
+
 def check_services(docs: list[dict]) -> list[str]:
     errors = []
     names = set()
@@ -379,6 +442,37 @@ def _env(container: dict) -> dict[str, str]:
     return {item.get("name"): item.get("value") for item in container.get("env") or []}
 
 
+def check_alerts(docs: list[dict]) -> list[str]:
+    """An alert nobody wrote is an outage nobody hears about.
+
+    The five rules are the ones that separate 'a tier is slow' from 'routing has
+    stopped'. A rule without a `for` window or a severity label fires either
+    too late or into no route.
+    """
+    errors = []
+    rule = find(docs, "PrometheusRule", "slm-fabric")
+    if rule is None:
+        return ["no PrometheusRule/slm-fabric in the rendered set"]
+    rules = [
+        item
+        for group in (rule.get("spec") or {}).get("groups") or []
+        for item in group.get("rules") or []
+        if item.get("alert")
+    ]
+    present = {item["alert"] for item in rules}
+    for name in sorted(REQUIRED_ALERTS - present):
+        errors.append(f"PrometheusRule/slm-fabric is missing alert {name}")
+    for item in rules:
+        name = item["alert"]
+        if not str(item.get("expr") or "").strip():
+            errors.append(f"alert {name} has no expression")
+        if not item.get("for"):
+            errors.append(f"alert {name} has no for duration")
+        if (item.get("labels") or {}).get("severity") not in {"warning", "critical"}:
+            errors.append(f"alert {name} has no warning/critical severity")
+    return errors
+
+
 def check_overlay(overlay: str, docs: list[dict]) -> list[str]:
     errors = []
     route = find(docs, "Route", "slm-gateway")
@@ -396,6 +490,7 @@ def check_overlay(overlay: str, docs: list[dict]) -> list[str]:
                 errors.append("Route/slm-gateway does not target the gateway Service")
         if servicemonitor is None:
             errors.append("OpenShift overlay has no ServiceMonitor")
+        errors.extend(check_alerts(docs))
         if not any(d.get("kind") == "NetworkPolicy" and d.get("metadata", {}).get("name") == "allow-monitoring-scrape" for d in docs):
             errors.append("OpenShift overlay does not allow Prometheus to scrape the backends")
 
@@ -448,6 +543,7 @@ def validate(docs: list[dict], overlay: str, policy_path: Path) -> list[str]:
         *check_resources(docs),
         *check_probes(docs),
         *check_mounts(docs),
+        *check_placement(docs),
         *check_services(docs),
         *check_policy_binding(docs, policy_path),
         *check_gateway_state(docs),

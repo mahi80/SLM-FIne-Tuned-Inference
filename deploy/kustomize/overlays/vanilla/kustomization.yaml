@@ -11,6 +11,7 @@ resources:
 
 components:
   - ../../components/model-download
+  - ../../components/cpu-placement
 
 patches:
   # Vanilla clusters do not assign a UID the way OpenShift's restricted SCC
