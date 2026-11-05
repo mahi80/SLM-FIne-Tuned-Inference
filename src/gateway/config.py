@@ -20,6 +20,7 @@ TENANT_KEYS = {
     "allowed_compute",
     "allowed_deployment",
     "allow_cloud",
+    "latency_budget_ms",
     "admin",
 }
 
@@ -37,6 +38,7 @@ class Tenant:
     allowed_deployment: tuple[str, ...] = ()
     allow_cloud: bool = False
     admin: bool = False
+    latency_budget_ms: int = 0
 
 
 def _string_list(value, field: str, tenant_id: str) -> tuple[str, ...]:
@@ -65,6 +67,10 @@ def load_tenants(path: str) -> list[Tenant]:
         rpm = int(item.get("rpm", 120))
         if rpm <= 0:
             raise ValueError(f"tenant '{tenant_id}': rpm must be positive")
+        # 0 means no budget: the tenant accepts whatever tier admission allows.
+        latency_budget_ms = int(item.get("latency_budget_ms") or 0)
+        if latency_budget_ms < 0:
+            raise ValueError(f"tenant '{tenant_id}': latency_budget_ms must be >= 0")
         region = str(item.get("region", "us"))
         data_class = str(item.get("data_class", "internal"))
         if data_class not in DATA_CLASSES:
@@ -106,6 +112,7 @@ def load_tenants(path: str) -> list[Tenant]:
                 allowed_deployment=allowed_deployment,
                 allow_cloud=bool(item.get("allow_cloud", False)),
                 admin=bool(item.get("admin", False)),
+                latency_budget_ms=latency_budget_ms,
             )
         )
     if not tenants:

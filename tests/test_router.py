@@ -109,6 +109,51 @@ aliases:
         sovereign: true
 """
 
+LATENCY_POLICY = """
+version: "test-latency"
+breaker:
+  failures: 2
+  window_s: 60
+  open_s: 10
+aliases:
+  fleet:
+    primary: gpu
+    candidates:
+      - name: gpu
+        compute: gpu
+        deployment: onprem
+        pool: gpu-pool
+        backend: http://gpu:8000
+        upstream_model: model-gpu
+        serves_regions: [eu, us]
+        sovereign: true
+        priority: 0
+        max_context: 100
+        latency_ms: 900
+      - name: cpu
+        compute: cpu
+        deployment: onprem
+        pool: cpu-pool
+        backend: http://cpu:8001
+        upstream_model: model-cpu
+        serves_regions: [eu, us]
+        sovereign: true
+        priority: 10
+        max_context: 50
+        latency_ms: 2500
+      - name: cloud
+        compute: gpu
+        deployment: cloud
+        pool: cloud-pool
+        backend: http://cloud:8001
+        upstream_model: model-cloud
+        serves_regions: [us]
+        sovereign: false
+        priority: 5
+        max_context: 100
+        latency_ms: 1500
+"""
+
 EXTERNAL_POLICY = """
 version: "test-external"
 aliases:
@@ -220,6 +265,109 @@ class PolicyLoadingTest(Workspace):
         bad = POLICY.replace("candidate: cpu\n      percent: 100", "candidate: gpu\n      percent: 100", 1)
         with self.assertRaises(ValueError):
             load_policy(str(self.policy_file(bad)))
+
+    def test_repository_candidates_restate_the_pool_latency(self) -> None:
+        policy = load_policy(str(Path(__file__).parents[1] / "config" / "policy.yaml"))
+        candidates = policy.aliases["slm-small"].candidates
+        self.assertEqual(candidates["gpu"].latency_ms, 900)
+        self.assertEqual(candidates["cpu"].latency_ms, 2500)
+        self.assertEqual(candidates["cloud-us"].latency_ms, 1500)
+
+    def test_latency_is_opt_in_and_defaults_to_undeclared(self) -> None:
+        policy = load_policy(str(self.policy_file(POLICY)))
+        self.assertEqual(policy.aliases["fleet"].candidates["gpu"].latency_ms, 0)
+
+    def test_declared_latency_must_be_positive(self) -> None:
+        for value in ("0", "-1"):
+            with self.subTest(value=value):
+                bad = LATENCY_POLICY.replace("latency_ms: 900", f"latency_ms: {value}", 1)
+                with self.assertRaises(ValueError):
+                    load_policy(str(self.policy_file(bad)))
+
+
+class LatencyBudgetTest(Workspace):
+    """A budget vetoes candidates that cannot meet it; 0 means no budget."""
+
+    def budget(self, ms: int, tokens: int = 10, **tenant_overrides):
+        engine, _ = self.engine(LATENCY_POLICY)
+        return engine.decide(
+            "fleet",
+            tenant(region="us", data_class="internal", **tenant_overrides),
+            "req-1",
+            tokens,
+            ms,
+        )
+
+    @staticmethod
+    def reasons(decision) -> dict[str, str]:
+        return {item.candidate: item.reason for item in decision.considered}
+
+    def test_budget_above_the_declared_latency_admits_the_primary(self) -> None:
+        decision = self.budget(1000, allowed_compute=("gpu",))
+        self.assertEqual(decision.kind, "primary")
+        self.assertEqual(decision.chosen.name, "gpu")
+        self.assertEqual(self.reasons(decision)["cloud"], "latency-budget-exceeded")
+
+    def test_budget_equal_to_the_declared_latency_admits(self) -> None:
+        decision = self.budget(900, allowed_compute=("gpu",))
+        self.assertEqual(decision.chosen.name, "gpu")
+        self.assertEqual(self.reasons(decision)["gpu"], "admitted")
+
+    def test_budget_below_the_declared_latency_vetoes_every_candidate(self) -> None:
+        decision = self.budget(800)
+        self.assertIsNone(decision.chosen)
+        self.assertEqual(decision.refusal, "no-capacity")
+        self.assertEqual(
+            self.reasons(decision),
+            {
+                "gpu": "latency-budget-exceeded",
+                "cpu": "latency-budget-exceeded",
+                "cloud": "latency-budget-exceeded",
+            },
+        )
+
+    def test_budget_of_zero_is_no_budget(self) -> None:
+        decision = self.budget(0)
+        self.assertEqual(decision.chosen.name, "gpu")
+        self.assertEqual(
+            self.reasons(decision),
+            {"gpu": "admitted", "cpu": "admitted", "cloud": "admitted"},
+        )
+
+    def test_candidate_without_declared_latency_is_never_vetoed(self) -> None:
+        engine, _ = self.engine(POLICY)
+        decision = engine.decide(
+            "fleet", tenant(region="us", data_class="internal"), "req-1", 10, 1
+        )
+        self.assertEqual(decision.chosen.name, "gpu")
+        reasons = self.reasons(decision)
+        self.assertEqual(reasons["gpu"], "admitted")
+        self.assertEqual(reasons["cloud"], "admitted")
+
+    def test_latency_veto_runs_after_context(self) -> None:
+        decision = self.budget(800, tokens=60)
+        reasons = self.reasons(decision)
+        self.assertEqual(reasons["cpu"], "context-exceeded")
+        self.assertEqual(reasons["gpu"], "latency-budget-exceeded")
+
+    def test_latency_veto_runs_after_the_tenant_allowlist(self) -> None:
+        decision = self.budget(1, allowed_tiers=("cpu",))
+        reasons = self.reasons(decision)
+        self.assertEqual(reasons["gpu"], "tier-denied")
+        self.assertEqual(reasons["cpu"], "latency-budget-exceeded")
+
+    def test_latency_veto_runs_before_the_breaker(self) -> None:
+        engine, _ = self.engine(LATENCY_POLICY)
+        for _ in range(2):
+            engine.breakers.record_failure(key("fleet", "gpu"))
+        tight = engine.decide(
+            "fleet", tenant(region="us", data_class="internal"), "req-1", 10, 800
+        )
+        self.assertEqual(self.reasons(tight)["gpu"], "latency-budget-exceeded")
+        roomy = engine.decide(
+            "fleet", tenant(region="us", data_class="internal"), "req-1", 10, 1000
+        )
+        self.assertEqual(self.reasons(roomy)["gpu"], "breaker-open")
 
 
 class AdmissionTest(Workspace):

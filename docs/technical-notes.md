@@ -14,6 +14,7 @@ in [adr/](adr/) hold the reasoning behind each choice; these notes collect the s
 - [Routing is a policy, not a table](#routing-is-a-policy-not-a-table)
 - [Fine-tuning: two adapters, one contract](#fine-tuning-two-adapters-one-contract)
 - [Benchmarks, release gates and cost](#benchmarks-release-gates-and-cost)
+- [Latency budget and cost](#latency-budget-and-cost)
 - [Repository map](#repository-map)
 
 ---
@@ -784,6 +785,88 @@ Full methodology and limits are in [ADR-0005](adr/ADR-0005-benchmarks-eval-cost.
 
 ---
 
+## Latency budget and cost
+
+Phase 3 admitted on who may be served; Stage 4 admits on how slow and how expensive that
+service may be. Latency and cost were already measured — they simply never reached a
+decision. Now each pool declares its SLO once, every candidate restates it, and a tenant may
+refuse any route that cannot meet its deadline.
+
+**Declared once, per pool.** `config/capacity.yaml` (version 3) carries an `slo` block:
+
+| Pool | `expected_latency_ms` | `cost_per_1k_out` | `cost_source` |
+|---|---:|---:|---|
+| `onprem-gpu` | 900 | 0.0 | `measured` |
+| `onprem-cpu` | 2500 | 0.0088 | `modelled` |
+| `cloud-burst` | 1500 | 0.00033 | `modelled` |
+
+`expected_latency_ms` is the p95 the pool is sized for. `cost_source` says whether hardware
+of that class was actually benchmarked: the GPU numbers come from the committed benchmark
+runs, the CPU and cloud numbers from the calibrated profiles in `src/tiersim/profiles.py`,
+which is why a `modelled: true` pool is not allowed to claim `measured`.
+
+**Restated per candidate, checked by the validator.** Each candidate in `config/policy.yaml`
+declares the same `latency_ms` it inherits from its pool. The deploy gate compares the two:
+latency must match exactly, `cost_per_1k_out` within 1e-9, and the error names the alias,
+the candidate, the pool and both values. Drift is a failed render, not a routing surprise.
+
+```yaml
+# config/capacity.yaml           # config/policy.yaml
+pools:                          aliases:
+  - name: onprem-gpu              slm-small:
+    slo:                            candidates:
+      expected_latency_ms: 900        - name: gpu
+      cost_per_1k_out: 0.0              pool: onprem-gpu
+      cost_source: measured             latency_ms: 900
+                                        cost_per_1k_out: 0.0
+```
+
+**A tenant budget vetoes, it does not rank.** `latency_budget_ms` in the tenant file
+(`0` = no budget) adds one admission rule, `latency-budget-exceeded`, after
+`context-exceeded` and before the breaker check. It fires only when the budget is positive,
+the candidate declares a positive latency, and that latency is larger than the budget. A
+candidate that declares nothing is never vetoed on latency, so a hand-written test policy
+keeps working. The reason lands in `vetoed` on the audit record, and the audit record now
+carries `latency_budget_ms` beside the decision fields:
+
+```json
+{"alias": "slm-small", "candidate": "cpu", "decision": "primary",
+ "latency_budget_ms": 1000, "vetoed": ["cloud-us:region-veto",
+ "cpu:latency-budget-exceeded"]}
+```
+
+```yaml
+# config/tenants.example.yaml — globex admits GPU and cloud, refuses the CPU tier
+- id: globex
+  latency_budget_ms: 2000
+```
+
+Admission now reads, in order: alias allowlist, tier, compute, deployment, `allow_cloud`,
+external backend readiness, region, sovereignty, context budget, **latency budget**, breaker
+state. The position of the new rule is deliberate: when several would reject the same
+candidate, the recorded reason is the one from the earlier rule, which makes a decision
+reproducible from the policy file alone.
+
+**What the veto is comparing.** A declared target against a declared budget — not the p95 of
+the request in flight. The GPU's 900 ms is a target calibrated from the benchmark table
+(p50 509 ms at one client, 569 ms at twelve), the CPU and cloud figures are modelled, and no
+live latency feeds back into either. A pool that is currently slower than its own SLO is
+caught by its breaker and by `SlmGpuTierUnavailable`, not by this veto. Cost is equally
+declared: the GPU marginal cost is 0.0 because the node is owned, and ADR-0005 prices that
+ownership per token separately.
+
+```bash
+# what a budget would do, without spending a request
+curl -s -X POST http://localhost:8020/v1/policy/explain \
+  -H 'Authorization: Bearer dev-acme-key' \
+  -d '{"model": "slm-small", "prompt_tokens": 128, "max_tokens": 128}'
+```
+
+The rationale and the limits — modelled figures, no live p95, a stale release manifest until
+it is re-signed — are in [ADR-0011](adr/ADR-0011-latency-and-cost-admission.md).
+
+---
+
 ## Repository map
 
 ```
@@ -794,8 +877,8 @@ config/bench.yaml                benchmark targets, concurrency levels and promp
 config/eval-gates.yaml           release floors and drift allowances
 config/cost.yaml                 ownership assumptions: capex, power, utilisation, workload
 config/release.yaml              release identity: model pin, images, adapters, gate, evidence
-config/capacity.yaml             pool registry: compute/deployment, endpoints, bounds, triggers, node contract
-config/tenants.example.yaml      tenant keys, quotas, region, data class; tenants.yaml is gitignored
+config/capacity.yaml             pool registry: compute/deployment, endpoints, bounds, triggers, SLO, node contract
+config/tenants.example.yaml      tenant keys, quotas, region, data class, latency budget; tenants.yaml is gitignored
 scripts/smoke.py                 GPU tier smoke test
 scripts/smoke_gateway.py         end-to-end test through the gateway, all tiers
 scripts/smoke_policy.py          admission, residency, canary stability, audit chain

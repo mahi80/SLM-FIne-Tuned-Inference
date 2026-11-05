@@ -454,12 +454,38 @@ class PoolChecks(unittest.TestCase):
             "deployment": "onprem",
             "pool": "onprem-gpu",
             "backend": "http://vllm-gpu:8000",
+            "latency_ms": 900,
+            "cost_per_1k_out": 0.0,
         }
         body.update(overrides)
         return body
 
     def test_repository_candidates_resolve_to_declared_pools(self):
         self.assertEqual(vd.check_pools(self.CAPACITY, REPO / "config/policy.yaml"), [])
+
+    def test_shipped_registry_declares_an_slo_per_pool(self):
+        for name, pool in self.CAPACITY["pools"].items():
+            with self.subTest(pool=name):
+                self.assertGreater(pool["slo"]["expected_latency_ms"], 0)
+                self.assertGreaterEqual(pool["slo"]["cost_per_1k_out"], 0)
+                self.assertIn(pool["slo"]["cost_source"], {"measured", "modelled"})
+
+    def test_candidate_latency_must_match_the_pool(self):
+        errors = self.check(self.candidate(latency_ms=800))
+        self.assertTrue(any("latency_ms" in error and "onprem-gpu" in error for error in errors))
+
+    def test_candidate_latency_is_required(self):
+        body = self.candidate()
+        del body["latency_ms"]
+        errors = self.check(body)
+        self.assertTrue(any("latency_ms" in error for error in errors))
+
+    def test_candidate_cost_must_match_the_pool(self):
+        errors = self.check(self.candidate(cost_per_1k_out=0.5))
+        self.assertTrue(any("cost_per_1k_out" in error for error in errors))
+
+    def test_candidate_cost_matches_within_a_float_tolerance(self):
+        self.assertEqual(self.check(self.candidate(cost_per_1k_out=1e-12)), [])
 
     def test_unknown_pool_is_rejected(self):
         errors = self.check(self.candidate(pool="onprem-h100"))
@@ -486,19 +512,8 @@ class PoolChecks(unittest.TestCase):
             path.write_text(
                 yaml.safe_dump(
                     {
-                        "version": 2,
-                        "pools": [
-                            {
-                                "name": "onprem-gpu",
-                                "compute": "gpu",
-                                "deployment": "onprem",
-                                "endpoint": "http://vllm-gpu:8000",
-                                "workload": "vllm-gpu",
-                                "replicas": {"min": 1, "max": 1},
-                                "node_pool": {"label": "nvidia.com/gpu.present"},
-                            }
-                        ]
-                        * 2,
+                        "version": 3,
+                        "pools": [self.registry_pool()] * 2,
                     }
                 ),
                 encoding="utf-8",
@@ -512,23 +527,100 @@ class PoolChecks(unittest.TestCase):
             path.write_text(
                 yaml.safe_dump(
                     {
-                        "pools": [
-                            {
-                                "name": "onprem-gpu",
-                                "compute": "gpu",
-                                "deployment": "onprem",
-                                "endpoint": "http://vllm-gpu:8000",
-                                "workload": "vllm-gpu",
-                                "replicas": {"min": 3, "max": 1},
-                                "node_pool": {"label": "nvidia.com/gpu.present"},
-                            }
-                        ]
+                        "version": 3,
+                        "pools": [self.registry_pool(replicas={"min": 3, "max": 1})],
                     }
                 ),
                 encoding="utf-8",
             )
             with self.assertRaises(RuntimeError):
                 vd.load_capacity(path)
+
+    @staticmethod
+    def registry_pool(**overrides) -> dict:
+        pool = {
+            "name": "onprem-gpu",
+            "compute": "gpu",
+            "deployment": "onprem",
+            "endpoint": "http://vllm-gpu:8000",
+            "workload": "vllm-gpu",
+            "replicas": {"min": 1, "max": 1},
+            "node_pool": {"label": "nvidia.com/gpu.present", "autoscaler": "none"},
+            "slo": {
+                "expected_latency_ms": 900,
+                "cost_per_1k_out": 0.0,
+                "cost_source": "measured",
+            },
+        }
+        pool.update(overrides)
+        return pool
+
+    def load_registry(self, **overrides) -> dict:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "capacity.yaml"
+            path.write_text(
+                yaml.safe_dump({"version": 3, "pools": [self.registry_pool(**overrides)]}),
+                encoding="utf-8",
+            )
+            return vd.load_capacity(path)
+
+    def test_registry_requires_an_slo_block(self):
+        with self.assertRaises(RuntimeError):
+            self.load_registry(slo=None)
+
+    def test_registry_rejects_non_positive_latency(self):
+        for value in (0, -900, "900"):
+            with self.subTest(value=value):
+                with self.assertRaises(RuntimeError):
+                    self.load_registry(
+                        slo={
+                            "expected_latency_ms": value,
+                            "cost_per_1k_out": 0.0,
+                            "cost_source": "measured",
+                        }
+                    )
+
+    def test_registry_rejects_a_negative_cost(self):
+        with self.assertRaises(RuntimeError):
+            self.load_registry(
+                slo={
+                    "expected_latency_ms": 900,
+                    "cost_per_1k_out": -0.1,
+                    "cost_source": "measured",
+                }
+            )
+
+    def test_registry_rejects_an_unknown_cost_source(self):
+        with self.assertRaises(RuntimeError):
+            self.load_registry(
+                slo={
+                    "expected_latency_ms": 900,
+                    "cost_per_1k_out": 0.0,
+                    "cost_source": "estimated",
+                }
+            )
+
+    def test_modelled_pool_cannot_claim_measured_cost(self):
+        with self.assertRaises(RuntimeError):
+            self.load_registry(
+                modelled=True,
+                slo={
+                    "expected_latency_ms": 2500,
+                    "cost_per_1k_out": 0.0088,
+                    "cost_source": "measured",
+                },
+            )
+
+    def test_modelled_pool_may_claim_modelled_cost(self):
+        capacity = self.load_registry(
+            modelled=True,
+            slo={
+                "expected_latency_ms": 2500,
+                "cost_per_1k_out": 0.0088,
+                "cost_source": "modelled",
+            },
+        )
+        self.assertEqual(capacity["pools"]["onprem-gpu"]["slo"]["cost_source"], "modelled")
 
 
 class CloudPoolSnippets(unittest.TestCase):
@@ -587,6 +679,8 @@ class ExternalBackendChecks(unittest.TestCase):
         "        pool: cloud-prod\n"
         "        backend: https://inference.example.com\n"
         "        upstream_model: model-cloud\n"
+        "        latency_ms: 1200\n"
+        "        cost_per_1k_out: 0.00033\n"
         "        access:\n"
         "          key: external-prod\n"
     )
@@ -617,6 +711,11 @@ class ExternalBackendChecks(unittest.TestCase):
             "metrics": [],
             "prerequisites": {},
             "node_pool": {},
+            "slo": {
+                "expected_latency_ms": 1200,
+                "cost_per_1k_out": 0.00033,
+                "cost_source": "modelled",
+            },
         }
         pool.update(overrides)
         return pool
@@ -745,6 +844,8 @@ class ExternalBackendChecks(unittest.TestCase):
             "        deployment: cloud\n"
             "        pool: cloud-burst\n"
             "        backend: http://tiersim-cloud:8001\n"
+            "        latency_ms: 1500\n"
+            "        cost_per_1k_out: 0.00033\n"
             "        access: {key: external-prod}\n"
         )
         with tempfile.TemporaryDirectory() as tmp:
@@ -764,6 +865,11 @@ class ExternalBackendChecks(unittest.TestCase):
             self.assertEqual(vd.check_pools(capacity, path), [])
 
     def test_registry_rejects_an_insecure_external_pool(self):
+        slo = {
+            "expected_latency_ms": 1200,
+            "cost_per_1k_out": 0.0,
+            "cost_source": "modelled",
+        }
         for overrides in (
             {"endpoint": "http://inference.example.com"},
             {"workload": "remote-gpu"},
@@ -779,6 +885,7 @@ class ExternalBackendChecks(unittest.TestCase):
                     "endpoint": "https://inference.example.com",
                     "workload": "",
                     "node_pool": {},
+                    "slo": dict(slo),
                 }
                 pool.update(overrides)
                 with tempfile.TemporaryDirectory() as tmp:

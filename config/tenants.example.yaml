@@ -9,6 +9,13 @@
 # scoring: allowed_tiers (gpu, cpu, cloud), allowed_compute (gpu, cpu) and
 # allowed_deployment (onprem, cloud). A tenant that may use any GPU but never a
 # cloud endpoint sets allowed_compute: [gpu] and allowed_deployment: [onprem].
+#
+# latency_budget_ms is the declared p95 the tenant's requests must fit, in
+# milliseconds; 0 (the default) means no budget. It is a veto, not a preference:
+# a candidate whose pool was sized for a slower p95 is considered and rejected
+# with `latency-budget-exceeded` rather than chosen as a fallback. Compare it
+# with the per-pool figures in config/capacity.yaml (onprem-gpu 900,
+# onprem-cpu 2500, cloud-burst 1500) — a budget below 900 admits no route today.
 tenants:
   - id: acme
     api_key: dev-acme-key
@@ -16,6 +23,10 @@ tenants:
     region: eu
     data_class: confidential
     allow_cloud: true      # EU cloud regions would be acceptable; us-east is not
+    # No budget by default, so the documented CPU failover still works. Setting
+    # this to 1000 would veto the CPU standby (2500 ms) and leave acme with the
+    # GPU or nothing — which is the point of a budget, not a default.
+    # latency_budget_ms: 1000
     admin: true
 
   - id: globex
@@ -24,5 +35,8 @@ tenants:
     region: us
     data_class: internal
     allow_cloud: true
+    # Admits the GPU (900 ms) and cloud (1500 ms) candidates, vetoes the CPU
+    # tier (2500 ms) with `latency-budget-exceeded`.
+    latency_budget_ms: 2000
     # Tenants pick an alias, not a tier; slm-small-cpu stays unavailable.
     allowed_aliases: [slm-small, slm-triage, slm-triage-v2]

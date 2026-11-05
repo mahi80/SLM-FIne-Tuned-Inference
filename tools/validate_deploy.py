@@ -20,6 +20,9 @@ What it protects, in order of how expensive the mistake is:
   * every policy candidate names a pool that config/capacity.yaml declares,
     and its compute, deployment and backend match that pool, so the router
     cannot route to capacity nobody has described;
+  * every pool declares the latency and cost it is admitted on (`slo`), and
+    every candidate repeats those numbers exactly, so a tenant latency budget
+    is checked against the figure the pool was sized for;
   * the GPU scaler matches config/capacity.yaml, keeps a warm floor, shares an
     RWX claim and preloads every declared adapter — and never scales the
     gateway, whose quota, breaker and audit state is in-process.
@@ -493,6 +496,8 @@ SCALER_KINDS = {"ScaledObject", "HorizontalPodAutoscaler"}
 COMPUTE_TYPES = {"gpu", "cpu"}
 DEPLOYMENT_TYPES = {"onprem", "cloud"}
 AUTOSCALERS = {"external", "none"}
+COST_SOURCES = {"measured", "modelled"}
+COST_TOLERANCE = 1e-9
 BACKEND_KEYS_SECRET = "slm-backend-keys"
 CLOUD_EGRESS_POLICY = "allow-gateway-cloud-egress"
 PRIVATE_NETWORKS = tuple(
@@ -573,13 +578,42 @@ def load_capacity(path: Path = CAPACITY_PATH) -> dict:
                 raise RuntimeError(
                     f"{where}: node_pool.autoscaler must be one of {sorted(AUTOSCALERS)}"
                 )
+        slo = raw.get("slo")
+        if not isinstance(slo, dict):
+            raise RuntimeError(
+                f"{where} ({name}) has no slo block; declare expected_latency_ms, "
+                "cost_per_1k_out and cost_source so admission has something to check"
+            )
+        latency = slo.get("expected_latency_ms")
+        if isinstance(latency, bool) or not isinstance(latency, int) or latency <= 0:
+            raise RuntimeError(
+                f"{where} ({name}): slo.expected_latency_ms must be a positive integer, "
+                f"got {latency!r}"
+            )
+        cost = slo.get("cost_per_1k_out")
+        if isinstance(cost, bool) or not isinstance(cost, (int, float)) or cost < 0:
+            raise RuntimeError(
+                f"{where} ({name}): slo.cost_per_1k_out must be a number >= 0, got {cost!r}"
+            )
+        cost_source = str(slo.get("cost_source") or "")
+        if cost_source not in COST_SOURCES:
+            raise RuntimeError(
+                f"{where} ({name}): slo.cost_source must be one of {sorted(COST_SOURCES)}, "
+                f"got {cost_source!r}"
+            )
+        modelled = bool(raw.get("modelled", False))
+        if modelled and cost_source == "measured":
+            raise RuntimeError(
+                f"{where} ({name}): pool is modelled: true but claims "
+                "slo.cost_source: measured; no hardware of that class was measured"
+            )
         pools[name] = {
             "name": name,
             "compute": compute,
             "deployment": deployment,
             "external": external,
             "provider": str(raw.get("provider") or ""),
-            "modelled": bool(raw.get("modelled", False)),
+            "modelled": modelled,
             "endpoint": endpoint,
             "workload": workload,
             "min_replicas": minimum,
@@ -587,6 +621,11 @@ def load_capacity(path: Path = CAPACITY_PATH) -> dict:
             "metrics": metrics,
             "prerequisites": raw.get("prerequisites") or {},
             "node_pool": node_pool,
+            "slo": {
+                "expected_latency_ms": latency,
+                "cost_per_1k_out": float(cost),
+                "cost_source": cost_source,
+            },
         }
     return {"version": data.get("version"), "pools": pools}
 
@@ -597,6 +636,8 @@ def check_pools(capacity: dict, policy_path: Path) -> list[str]:
     The candidate states compute and deployment because admission reasons about
     them; the pool states where the work actually lands. If those two drift, a
     policy review approves a route nobody deployed — or forbids one that exists.
+    Latency and cost drift the same way: the candidate restates the pool's SLO,
+    and a tenant budget is only meaningful if both copies agree.
     """
     errors = []
     policy = yaml.safe_load(Path(policy_path).read_text(encoding="utf-8")) or {}
@@ -627,6 +668,29 @@ def check_pools(capacity: dict, policy_path: Path) -> list[str]:
             if backend != pool["endpoint"]:
                 errors.append(
                     f"{where} points at {backend!r}, pool {name} endpoint is {pool['endpoint']!r}"
+                )
+            # Latency and cost are admission inputs, so the candidate restates
+            # them: a budget checked against a stale copy would veto the wrong
+            # routes. Latency must match exactly; cost is a float, so compare
+            # within a tolerance far below any real per-token price.
+            slo = pool["slo"]
+            latency = raw.get("latency_ms")
+            if isinstance(latency, bool) or not isinstance(latency, int) or latency != slo[
+                "expected_latency_ms"
+            ]:
+                errors.append(
+                    f"{where} declares latency_ms {latency!r}, pool {name} "
+                    f"slo.expected_latency_ms is {slo['expected_latency_ms']}"
+                )
+            cost = raw.get("cost_per_1k_out")
+            if (
+                isinstance(cost, bool)
+                or not isinstance(cost, (int, float))
+                or abs(float(cost) - slo["cost_per_1k_out"]) > COST_TOLERANCE
+            ):
+                errors.append(
+                    f"{where} declares cost_per_1k_out {cost!r}, pool {name} "
+                    f"slo.cost_per_1k_out is {slo['cost_per_1k_out']}"
                 )
             has_access = raw.get("access") is not None
             if has_access != pool["external"]:
