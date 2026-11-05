@@ -3,7 +3,7 @@ DC := docker compose
 
 .DEFAULT_GOAL := help
 
-.PHONY: help env gpu-check build up down logs ps test smoke smoke-gateway smoke-policy metrics health health-gateway clean \
+.PHONY: help env doctor gpu-check build up down logs ps test smoke smoke-gateway smoke-policy metrics health health-gateway clean \
         adapter-data adapter-train adapters adapter-eval adapter-smoke \
         bench eval-baseline eval-gate cost \
         deploy-images deploy-render deploy-validate deploy-secret \
@@ -15,6 +15,9 @@ help: ## Show available targets
 env: ## Create .env and config/tenants.yaml from their examples
 	@test -f .env || (cp .env.example .env && echo "created .env")
 	@test -f config/tenants.yaml || (cp config/tenants.example.yaml config/tenants.yaml && echo "created config/tenants.yaml")
+
+doctor: ## Check Docker, GPU, ports and env files before the first start
+	python scripts/doctor.py
 
 gpu-check: ## Verify the NVIDIA GPU is visible inside Docker
 	@docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi

@@ -88,46 +88,124 @@ GKE differ only in node pools, storage class, KMS and DNS.
 
 ---
 
-## Quickstart
+## Start here (first run)
 
-Requirements: Docker Desktop (WSL2 backend), an NVIDIA GPU with a working Windows driver,
-Python 3.10+, ~12 GB free VRAM and ~15 GB disk.
+You do not need to know the architecture to get it running. You need Docker and, for the
+real model, one NVIDIA GPU. Everything is copy-paste; `make` is a convenience, not a
+requirement.
+
+| You need | Why | Check |
+|---|---|---|
+| Docker Desktop or Docker Engine with Compose v2 | runs every service | `docker compose version` |
+| An NVIDIA GPU with ~12 GB VRAM and a working driver | serves the 4B AWQ model | `nvidia-smi` |
+| ~20 GB free disk and 10–20 minutes on first start | image builds and model download | `df -h` |
+| Python 3.10+ | preflight and smoke scripts | `python --version` |
+
+No GPU? You can still run the unit tests and the static deployment checks:
+`make test` and `make deploy-validate` (or the raw commands in the troubleshooting table).
+The full stack will not start, because the gateway waits for the GPU tier to be healthy.
+
+**1. Get the code**
 
 ```bash
-make gpu-check     # NVIDIA GPU visible inside a container
-make up            # build, pull, download weights, wait until every service is healthy
-make smoke         # GPU tier directly
-make smoke-gateway # all tiers through the gateway
-make smoke-policy  # admission, residency veto, canary stability, audit chain
-make test          # router, eval, cost and deployment unit tests (stdlib unittest)
-make adapter-train # QLoRA adapters v1/v2, then hot-load them (takes the GPU ~25 min)
-make adapter-smoke # adapter aliases end to end through the gateway
-make adapter-eval  # base vs v1 vs v2 on the held-out triage set
-make bench         # tier benchmark matrix; writes bench/results
-make eval-gate     # golden-set release gate with drift against eval-baseline.json
-make cost          # ownership cost per 1M output tokens
-make release-check # signed manifest = policy = adapters = overlays = compose
-make signoff       # tests, both validators, signature verify; writes docs/signoff/evidence.json
-make logs          # follow all services
-make down          # stop (model cache and dashboards are kept)
+git clone https://github.com/mahi80/SLM-FIne-Tuned-Inference.git
+cd SLM-FIne-Tuned-Inference
 ```
 
-| Service | URL | Notes |
-|---|---|---|
-| Gateway (OpenAI API) | http://localhost:8020 | `Authorization: Bearer dev-acme-key` |
-| GPU tier | http://localhost:8010 | direct; bypasses the gateway |
-| CPU tier (simulated) | http://localhost:8011 | direct; responses carry `x-simulated: true` |
-| Cloud tier (simulated) | http://localhost:8012 | L4 profile; a residency-gated standby |
-| Prometheus | http://localhost:9090 | scrapes gateway, both simulators and vLLM |
-| Grafana | http://localhost:3001 | `admin` / `admin`, dashboard **SLM Serving Fabric** |
+**2. Check the machine first**
 
-Clients send the same OpenAI request to the gateway and pick a tier with the model alias:
+```bash
+python scripts/doctor.py
+```
+
+This installs nothing and prints only PASS/WARN/FAIL lines. It checks Docker and Compose,
+the NVIDIA driver and Docker runtime, VRAM, free disk, the six host ports, the env files and
+whether `compose.yaml` validates. If `.env` or `config/tenants.yaml` is missing:
+
+```bash
+python scripts/doctor.py --fix   # creates both from the committed examples
+```
+
+The tenant keys in the example are local demo keys. Replace them in
+`config/tenants.yaml` (gitignored) before the gateway is reachable from anywhere else.
+
+**3. Start it**
+
+```bash
+make up
+```
+
+No `make` on Windows Git Bash? Use `docker compose up -d --wait`. The first run builds the
+gateway and simulator images and downloads the pinned weights; vLLM allows up to 10 minutes
+to become healthy.
+
+**4. See that it works**
+
+```bash
+make ps                # every service should be healthy
+make health            # {"status":"ok","aliases":4,"policy_version":"...","breakers":{...}}
+make smoke-gateway     # auth, GPU streaming, simulated CPU tier, metrics
+```
+
+Then send one request:
 
 ```bash
 curl -s http://localhost:8020/v1/chat/completions \
   -H 'Authorization: Bearer dev-acme-key' \
   -H 'Content-Type: application/json' \
   -d '{"model":"slm-small","messages":[{"role":"user","content":"hello"}],"max_tokens":32}'
+```
+
+**5. Look at it**
+
+| Service | URL | Notes |
+|---|---|---|
+| Grafana | http://localhost:3001 | `admin` / `admin`, dashboard **SLM Serving Fabric** |
+| Prometheus | http://localhost:9090 | scrapes gateway, both simulators and vLLM |
+| Gateway (OpenAI API) | http://localhost:8020 | `Authorization: Bearer dev-acme-key` |
+| GPU tier | http://localhost:8010 | direct; bypasses the gateway |
+| CPU tier (simulated) | http://localhost:8011 | direct; responses carry `x-simulated: true` |
+| Cloud tier (simulated) | http://localhost:8012 | L4 profile; a residency-gated standby |
+
+The GPU tier is real. The CPU and cloud tiers are calibrated simulators and label every
+response `x-simulated: true`; their numbers are MODELLED, not measured.
+
+**6. Stop**
+
+```bash
+make down     # or: docker compose down
+```
+
+The model cache and dashboards are kept. `make clean` also deletes those volumes.
+
+### Troubleshooting
+
+| Symptom | What to do |
+|---|---|
+| `make: command not found` | Use the raw command shown beside each step, e.g. `docker compose up -d --wait`. |
+| `doctor` says the Docker daemon is not running | Start Docker Desktop and wait for “Engine running”, then rerun. |
+| No NVIDIA GPU / Docker has no nvidia runtime | Install the NVIDIA driver and enable GPU support in Docker Desktop (or `nvidia-container-toolkit` on Linux). `make gpu-check` must print `nvidia-smi` output. Without a GPU, run only the tests and validators. |
+| A port is already in use | Change the matching `*_PORT` in `.env` (for example `GATEWAY_PORT=8120`), then `make up`. |
+| Gateway is unhealthy | `docker compose logs -f vllm-gpu`; first start can take 10 minutes for weights. Check disk space too. |
+| `401` from the gateway | Use the key from your local `config/tenants.yaml` (`dev-acme-key` is the example). |
+| Want a clean slate | `make down` keeps data; `make clean` deletes containers and volumes, including the model cache. |
+| Nothing works | `python scripts/doctor.py` again and read the FAIL hints; they name the exact fix. |
+
+### Everyday commands
+
+```bash
+make doctor        # preflight: Docker, GPU, ports, env files
+make up            # start and wait until healthy
+make logs          # follow all services
+make smoke         # GPU tier directly
+make smoke-policy  # admission, residency veto, canary stability, audit chain
+make test          # 112 unit tests, no GPU or cluster needed
+make adapter-train # QLoRA adapters v1/v2, then hot-load them (~25 min of GPU)
+make bench         # tier benchmark matrix
+make eval-gate     # golden-set release gate
+make cost          # ownership cost per 1M output tokens
+make release-check # signed manifest = policy = adapters = overlays = compose
+make signoff       # tests, both validators, signature verify; writes evidence.json
 ```
 
 `slm-small` prefers the GPU tier and has CPU and cloud standbys; `slm-small-cpu` pins the
