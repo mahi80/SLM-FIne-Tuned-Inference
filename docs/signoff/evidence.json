@@ -9,7 +9,7 @@
     "config/cost.yaml": "fc9bfb7777ae5b703732d9d9954f80d1026fdc1e226166e9104f1d61bc434622",
     "config/eval-gates.yaml": "50fee941f061743c74fd0ae2f8bb0511ee85cbf8f7be69d445ed19321ae2842e",
     "config/policy.yaml": "467738c0a97fabd53345fa43210b780a8ab3412eb4803f2dd6e0f400bbb2b6cc",
-    "config/release.yaml": "1933499d75c501a4e41aa85c9a6e6563a63ff0c79b7456efb725b2c79a2b0a2d",
+    "config/release.yaml": "878963df02fb11e48f8c5acbd3eaddf53aa0710c63fb26b5f1aef2e029a118e8",
     "src/eval/golden.jsonl": "819c526a4406cb3a2a2b820fa535c3f7b8ad84aa10ea780abc3092a857acce39"
   },
   "environment": {
@@ -17,7 +17,7 @@
     "platform": "Windows-11-10.0.26200-SP0",
     "python": "3.12.10"
   },
-  "generated_at": "2026-11-05T01:17:21Z",
+  "generated_at": "2026-11-05T01:19:57Z",
   "notes": [
     "Artifacts are hashed as they exist in the working tree at generation time.",
     "The release signature is verified against the committed public key, not a trust root.",
@@ -34,7 +34,7 @@
         "sha256": "a459129539cf1573736a011ae172f6e2e88c24366e597d4c5828ce3ab4fca159"
       }
     ],
-    "canonical_sha256": "98fc3a6825b4aab1498862ca010e569c0305fe0dfb8b4ce49dd61b22941d2a47",
+    "canonical_sha256": "1fccfe19e243ae1b7c193130cbee22a5489aed715e9720d7beee7e87c468caa5",
     "gate": {
       "checks_total": 13,
       "metrics": {
@@ -63,7 +63,7 @@
       "passed": true
     },
     "manifest": "release/slm-0.5.0.json",
-    "manifest_sha256": "26a4ce8d41fcbe4438515ae03fc43a2ffa885075caedcee564e4bc4a662e3cc4",
+    "manifest_sha256": "50b4b1ebe55905fd7d5fe5ee7f7050af7d914603e24a68cf062f9095889d7f5a",
     "model": {
       "base_id": "Qwen/Qwen3-4B-Instruct-2507",
       "id": "cyankiwi/Qwen3-4B-Instruct-2507-AWQ-4bit",
@@ -78,7 +78,7 @@
     "signature_verified": true
   },
   "source": {
-    "commit": "8e1eda40ed67220c05816f934cf036a97e281b86",
+    "commit": "2b4d107759b165aabe3dcc691029bb027e38e7dd",
     "dirty": false
   },
   "tests": {
