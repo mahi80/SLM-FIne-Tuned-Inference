@@ -1,0 +1,41 @@
+# EXAMPLE ONLY — a starting point for deploy/kustomize/components/cloud-egress,
+# not applied by any overlay.
+#
+# Base denies all egress. This rule opens exactly two destinations: the provider
+# endpoint and, when credentials come from an IdP, the token endpoint. Both are
+# public ranges on TCP 443 — the shipped component carries only the provider
+# rule, so an OIDC deployment must add the second one.
+#
+# The validator (tools/validate_deploy.py) rejects a rule that names no peer, a
+# peer that is not an ipBlock, a private/loopback/link-local CIDR, 0.0.0.0/0 and
+# any port other than TCP 443. Replace the TEST-NET-2 placeholders with the
+# ranges the provider and the IdP publish; NetworkPolicy cannot express a DNS
+# name, and a private endpoint is reached in-cluster rather than through here.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-gateway-cloud-egress
+  labels:
+    app.kubernetes.io/part-of: slm-fabric
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: gateway
+  policyTypes: [Egress]
+  egress:
+    # Inference endpoint(s) from config/policy.yaml `backend:`.
+    - to:
+        - ipBlock:
+            cidr: 198.51.100.0/24
+      ports:
+        - protocol: TCP
+          port: 443
+    # OIDC token endpoint from `access.token_url`. Only needed for source: oidc.
+    - to:
+        - ipBlock:
+            cidr: 203.0.113.0/24
+      ports:
+        - protocol: TCP
+          port: 443

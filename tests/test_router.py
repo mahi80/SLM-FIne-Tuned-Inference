@@ -147,6 +147,15 @@ class Clock:
         return self.now
 
 
+def access_policy(*lines: str) -> str:
+    """EXTERNAL_POLICY whose `access` block is exactly `lines`.
+
+    Each line is already written as it would appear under `access:`.
+    """
+    block = "\n".join(f"          {line}" for line in lines)
+    return EXTERNAL_POLICY.replace("          key: external-prod", block)
+
+
 def tenant(**overrides):
     values = {
         "id": "t1",
@@ -391,6 +400,168 @@ class ExternalBackendTest(Workspace):
         decision = store.engine.decide("burst", cloud_only, "req-1", 10)
         reasons = {item.candidate: item.reason for item in decision.considered}
         self.assertEqual(reasons["cloud"], "backend-unconfigured")
+
+
+class AccessSourceTest(Workspace):
+    """`access.source` decides how a credential is obtained; the parser is the
+    only place that can reject a half-specified source."""
+
+    def policy(self, *lines: str):
+        return load_policy(str(self.policy_file(access_policy(*lines))))
+
+    def access(self, *lines: str):
+        return self.policy(*lines).aliases["burst"].candidates["cloud"].access
+
+    def rejected(self, *lines: str, mentions: str | None = None) -> str:
+        with self.assertRaises(ValueError) as raised:
+            self.policy(*lines)
+        if mentions is not None:
+            self.assertIn(mentions, str(raised.exception))
+        return str(raised.exception)
+
+    def test_a_candidate_without_a_source_is_static(self) -> None:
+        access = self.access("key: external-prod")
+        self.assertEqual(access.source, "static")
+        self.assertIsNone(access.token_url)
+        self.assertIsNone(access.client_id)
+        self.assertIsNone(access.scope)
+
+    def test_explicit_static_source_is_accepted(self) -> None:
+        self.assertEqual(self.access("key: external-prod", "source: static").source, "static")
+
+    def test_file_source_names_a_token_file(self) -> None:
+        access = self.access("key: provider-token", "source: file")
+        self.assertEqual(access.source, "file")
+        self.assertEqual(access.key, "provider-token")
+        self.assertIsNone(access.token_url)
+
+    def test_file_key_may_carry_dots_and_dashes(self) -> None:
+        access = self.access("key: sa-token.v2", "source: file")
+        self.assertEqual(access.key, "sa-token.v2")
+
+    def test_oidc_source_keeps_every_field(self) -> None:
+        access = self.access(
+            "key: provider-oidc",
+            "source: oidc",
+            "token_url: https://idp.example.com/oauth2/token",
+            "client_id: slm-gateway",
+            "scope: inference.read",
+        )
+        self.assertEqual(access.source, "oidc")
+        self.assertEqual(access.token_url, "https://idp.example.com/oauth2/token")
+        self.assertEqual(access.client_id, "slm-gateway")
+        self.assertEqual(access.scope, "inference.read")
+
+    def test_oidc_scope_is_optional(self) -> None:
+        access = self.access(
+            "key: provider-oidc",
+            "source: oidc",
+            "token_url: https://idp.example.com/token",
+            "client_id: slm-gateway",
+        )
+        self.assertIsNone(access.scope)
+
+    def test_unknown_source_is_rejected(self) -> None:
+        self.rejected("key: external-prod", "source: oauth", mentions="source must be one of")
+
+    def test_unknown_access_key_is_rejected(self) -> None:
+        self.rejected("key: external-prod", "audience: inference", mentions="unknown keys")
+
+    def test_token_url_on_a_static_source_is_rejected(self) -> None:
+        self.rejected(
+            "key: external-prod",
+            "token_url: https://idp.example.com/token",
+            mentions="only valid for source 'oidc'",
+        )
+
+    def test_client_id_on_a_file_source_is_rejected(self) -> None:
+        self.rejected(
+            "key: provider-token",
+            "source: file",
+            "client_id: slm-gateway",
+            mentions="only valid for source 'oidc'",
+        )
+
+    def test_scope_on_a_static_source_is_rejected(self) -> None:
+        self.rejected(
+            "key: external-prod", "scope: inference.read", mentions="only valid for source 'oidc'"
+        )
+
+    def test_oidc_requires_a_token_url(self) -> None:
+        self.rejected(
+            "key: provider-oidc", "source: oidc", "client_id: slm-gateway", mentions="token_url"
+        )
+
+    def test_oidc_requires_a_client_id(self) -> None:
+        self.rejected(
+            "key: provider-oidc",
+            "source: oidc",
+            "token_url: https://idp.example.com/token",
+            mentions="client_id",
+        )
+
+    def test_oidc_scope_must_not_be_blank(self) -> None:
+        self.rejected(
+            "key: provider-oidc",
+            "source: oidc",
+            "token_url: https://idp.example.com/token",
+            "client_id: slm-gateway",
+            "scope: ''",
+            mentions="scope",
+        )
+
+    def test_token_url_must_use_https(self) -> None:
+        self.rejected(
+            "key: provider-oidc",
+            "source: oidc",
+            "token_url: http://idp.example.com/token",
+            "client_id: slm-gateway",
+            mentions="must use https",
+        )
+
+    def test_token_url_must_name_a_host(self) -> None:
+        self.rejected(
+            "key: provider-oidc",
+            "source: oidc",
+            "token_url: https:///token",
+            "client_id: slm-gateway",
+            mentions="must name a host",
+        )
+
+    def test_token_url_must_not_embed_credentials(self) -> None:
+        self.rejected(
+            "key: provider-oidc",
+            "source: oidc",
+            "token_url: https://user:secret@idp.example.com/token",
+            "client_id: slm-gateway",
+            mentions="must not embed credentials",
+        )
+
+    def test_token_url_must_not_carry_a_query_or_fragment(self) -> None:
+        self.rejected(
+            "key: provider-oidc",
+            "source: oidc",
+            "token_url: https://idp.example.com/token?audience=slm",
+            "client_id: slm-gateway",
+            mentions="must not carry a query or fragment",
+        )
+        self.rejected(
+            "key: provider-oidc",
+            "source: oidc",
+            "token_url: https://idp.example.com/token#frag",
+            "client_id: slm-gateway",
+            mentions="must not carry a query or fragment",
+        )
+
+    def test_file_key_cannot_traverse(self) -> None:
+        for name in ("../token", "sub/token", "/etc/passwd", ".", "..", ".hidden", "-token"):
+            with self.subTest(key=name):
+                self.rejected("key: '{}'".format(name), "source: file", mentions="token file")
+
+    def test_static_key_keeps_the_loose_name_rule(self) -> None:
+        # Only a file source turns the key into a path, so a static key with a
+        # space or a slash stays a legal keys-file entry.
+        self.assertEqual(self.access("key: 'external prod/v2'").key, "external prod/v2")
 
 
 class CanaryTest(Workspace):

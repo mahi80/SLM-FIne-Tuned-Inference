@@ -75,6 +75,68 @@ Until you do this, `cloud-burst` in `config/capacity.yaml` is `provider:
 simulated` and every response it serves is labelled `x-simulated`. The rationale
 and limits are in [ADR-0009](../../docs/adr/ADR-0009-external-backends.md).
 
+## Which endpoints actually work
+
+The gateway is an OpenAI-compatible proxy, not a translation layer: it calls
+`POST <backend>/v1/chat/completions` and `GET <backend>/health`, and it
+authenticates with one header. That is the whole contract, so the honest
+compatibility list is short.
+
+| Endpoint | Path and auth | Works unchanged? |
+|---|---|---|
+| vLLM (or TGI, SGLang, llama.cpp server) on a cloud GPU, reachable over `https` | OpenAI paths; a bearer token from an `api-key`/`--api-key` flag or an auth proxy in front | **Yes** — `backend: https://…`, `access: {key: …}` |
+| OpenAI-compatible SaaS (hosted vLLM/TGI endpoints, Together, Fireworks, DeepInfra, and OpenAI itself) | `Authorization: Bearer <api key>`, `/v1/chat/completions` | **Yes** — one key per provider |
+| Azure OpenAI | `/openai/deployments/<deployment>/chat/completions?api-version=…`, `api-key:` header, model in the path | **No** — different path, header and query; needs a fronting proxy until an adapter exists |
+| Amazon Bedrock | `bedrock-runtime` `Converse`/`InvokeModel`, SigV4 request signing, model id in the path | **No** — different API, different auth; needs a fronting proxy until an adapter exists |
+| Google Vertex AI | `generateContent` under a project/location path, Google OAuth2 access token | **No** — different path and body; needs a fronting proxy until an adapter exists |
+
+"No" means exactly that: an `access` block cannot make that provider work, because
+the gateway would still call `/v1/chat/completions` with a bearer header. The
+supported pattern today is a thin service (an in-cluster Deployment, a gateway
+product, or the provider's own compatibility shim) that exposes the OpenAI shape
+and holds the provider-specific auth; the platform then treats *that* service as
+the external backend. An adapter inside the gateway — request/response mapping
+plus SigV4 or Google OAuth — is not implemented, and no compatibility claim is
+made for it.
+
+## Credentials
+
+`access.source` says where the credential behind `access.key` comes from:
+
+* `static` (default) — the value in `Secret/slm-backend-keys`, read at startup; a
+  rotation is a Secret update plus a restart.
+* `file` — `key` names a file under `SLM_BACKEND_TOKEN_DIR` (default
+  `/app/backend-tokens`), read on every request. Use it for a projected
+  service-account token or anything else that rotates on disk; no restart and no
+  reload is needed. The file name must be a plain name (`[A-Za-z0-9][A-Za-z0-9._-]*`).
+  The base Deployment mounts only the keys Secret, so a `file` candidate also
+  needs a projected-token volume (see `examples/policy-candidates.yaml`).
+* `oidc` — `key` names a client secret in the same Secret, exchanged at
+  `token_url` (client-credentials grant, optional `scope`) for a short-lived
+  access token. The token is cached per gateway process until about a minute
+  before it expires; a `401` clears it and retries that candidate once.
+
+Copy-ready snippets for all three are in [`examples/`](examples/): a pool entry,
+a policy fragment and an egress rule that also covers the IdP. Nothing in
+`examples/` is applied by an overlay.
+
+After mounting the Secret, check what this cluster can actually do before sending
+tenant traffic:
+
+```bash
+PYTHONPATH=src python -m tools.check_backend \
+  --policy config/policy.yaml --keys /app/backend-keys/keys.yaml
+```
+
+One line per external candidate — alias, candidate, host, key name, source,
+configured state, probe result, latency — and exit 1 if any is unconfigured,
+fails authentication or is down. It prints key names, never key values.
+`tests/test_check_backend.py` drives the same code with a mocked transport.
+
+No IdP and no provider was contacted for any of this: the token exchange, cache,
+401 retry and harness are proven against a local mock. ADR-0010 states the
+remaining limits (per-process cache, no refresh tokens, no private-key JWT).
+
 ## Autoscaling interaction
 
 The pool bounds in `config/capacity.yaml` are pod bounds. The node autoscaler

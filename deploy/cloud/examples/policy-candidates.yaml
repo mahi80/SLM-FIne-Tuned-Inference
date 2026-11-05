@@ -1,0 +1,83 @@
+# EXAMPLE ONLY — not referenced by config/policy.yaml or by any overlay.
+#
+# Three ways to authenticate an external candidate. Each candidate points at a
+# pool from external-pool.yaml and declares *which* credential to use, never the
+# credential itself.
+#
+# The credential always arrives server-side:
+#   static — the value in Secret/slm-backend-keys is sent as-is;
+#   file   — a token file under SLM_BACKEND_TOKEN_DIR is read on every request,
+#            so a rotated projected token needs no restart;
+#   oidc   — the value in Secret/slm-backend-keys is a client secret, exchanged
+#            at token_url for a short-lived access token (client credentials).
+#
+# `tools/check_backend.py` prints what each of these resolves to on a live
+# cluster without revealing any value.
+aliases:
+  slm-small:
+    description: "External candidates, one per credential source"
+    primary: cloud-static
+    candidates:
+      # 1. Static key: the shape shipped in Stage 2. Rotation is a Secret update
+      #    plus a pod restart, because the keys file is read once at startup.
+      - name: cloud-static
+        compute: gpu
+        deployment: cloud
+        pool: cloud-prod
+        backend: https://inference.provider.example
+        upstream_model: model-name
+        region: us-east
+        serves_regions: [us]
+        sovereign: false
+        max_context: 32768
+        cost_per_1k_out: 0.0006
+        access:
+          key: external-prod          # entry in Secret/slm-backend-keys
+          header: authorization       # default
+          prefix: "Bearer "           # default
+
+      # 2. File token: a projected service-account token, or anything else that
+      #    rotates on disk. The key is a file name in the token directory —
+      #    letters, digits, '.', '_' and '-' only, no separators. The file is
+      #    read on every request, so a new token is used immediately.
+      - name: cloud-file
+        compute: gpu
+        deployment: cloud
+        pool: cloud-gpu-vllm
+        backend: https://vllm.internal.example.com
+        upstream_model: model-name
+        region: us-east
+        serves_regions: [us]
+        sovereign: false
+        max_context: 16384
+        cost_per_1k_out: 0.0009
+        access:
+          source: file
+          key: provider-token         # /app/backend-tokens/provider-token
+          # Mount the projected token where the gateway can read it, e.g.
+          #   volumes: [{name: tokens, projected: {sources: [{serviceAccountToken:
+          #     {path: provider-token, expirationSeconds: 3600}}]}}]
+          #   volumeMounts: [{name: tokens, mountPath: /app/backend-tokens, readOnly: true}]
+          # and set SLM_BACKEND_TOKEN_DIR if the path differs.
+
+      # 3. OIDC client credentials: the gateway holds a client secret and asks
+      #    the IdP for a token. `key` names the secret in the keys file, so the
+      #    policy still never carries it. The token is cached per process until
+      #    about a minute before it expires; a 401 triggers one refresh and retry.
+      - name: cloud-oidc
+        compute: gpu
+        deployment: cloud
+        pool: cloud-prod
+        backend: https://inference.provider.example
+        upstream_model: model-name
+        region: us-east
+        serves_regions: [us]
+        sovereign: false
+        max_context: 32768
+        cost_per_1k_out: 0.0006
+        access:
+          source: oidc
+          key: provider-oidc          # client secret in Secret/slm-backend-keys
+          token_url: https://idp.example.com/oauth2/token   # https, host only
+          client_id: slm-gateway
+          scope: inference.read        # optional; a blank scope is rejected

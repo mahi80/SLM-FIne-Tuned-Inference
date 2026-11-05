@@ -25,7 +25,10 @@ COMPUTE = frozenset({"gpu", "cpu"})
 DEPLOYMENTS = frozenset({"onprem", "cloud"})
 STICKY_KEYS = frozenset({"tenant", "request"})
 DATA_CLASSES = frozenset({"public", "internal", "confidential", "restricted"})
+ACCESS_SOURCES = frozenset({"static", "file", "oidc"})
 HEADER_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+TOKEN_FILE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+OIDC_FIELDS = ("token_url", "client_id", "scope")
 
 
 def _require_keys(raw: dict, required: set[str], optional: set[str], where: str) -> None:
@@ -43,11 +46,26 @@ class Access:
 
     The policy names the key; it does not contain it. `key` is a lookup into a
     mounted secret file, so a policy diff never carries a credential.
+
+    `source` says how the credential becomes a header value:
+
+    * `static` — the value in the keys file is the credential, sent as-is until
+      the Secret changes and the process restarts;
+    * `file` — `key` names a file in the token directory (a projected
+      service-account token, for example), read on every request so rotation
+      needs no restart;
+    * `oidc` — the keys file holds a client secret, exchanged at `token_url`
+      for a short-lived access token. The exchange is server-side and the token
+      is cached in the process, never in the policy.
     """
 
     key: str
     header: str = "authorization"
     prefix: str = "Bearer "
+    source: str = "static"
+    token_url: str | None = None
+    client_id: str | None = None
+    scope: str | None = None
 
 
 @dataclass(frozen=True)
@@ -124,29 +142,94 @@ class Policy:
 def _access(raw: dict, where: str) -> Access:
     if not isinstance(raw, dict):
         raise ValueError(f"{where}.access must be a mapping")
-    _require_keys(raw, {"key"}, {"header", "prefix"}, f"{where}.access")
+    _require_keys(
+        raw,
+        {"key"},
+        {"header", "prefix", "source", "token_url", "client_id", "scope"},
+        f"{where}.access",
+    )
     key = raw["key"]
     if not isinstance(key, str) or not key.strip():
         raise ValueError(f"{where}.access: key must be a non-empty name")
+    key = key.strip()
+
+    source = str(raw.get("source", "static")).strip()
+    if source not in ACCESS_SOURCES:
+        raise ValueError(
+            f"{where}.access: source must be one of {sorted(ACCESS_SOURCES)}, got '{source}'"
+        )
+
+    if source == "file":
+        # The key becomes a path in the token directory, so it must be a plain
+        # file name: no separators, no traversal, no hidden dotfiles.
+        if not TOKEN_FILE_NAME.match(key) or key in {".", ".."}:
+            raise ValueError(
+                f"{where}.access: source 'file' needs key to name a token file "
+                f"(letters, digits, '.', '_' or '-'), got '{key}'"
+            )
+
+    if source != "oidc":
+        for field in OIDC_FIELDS:
+            if raw.get(field) is not None:
+                raise ValueError(
+                    f"{where}.access: '{field}' is only valid for source 'oidc', "
+                    f"not '{source}'"
+                )
+        token_url = client_id = scope = None
+    else:
+        token_url = raw.get("token_url")
+        if not isinstance(token_url, str) or not token_url.strip():
+            raise ValueError(f"{where}.access: source 'oidc' requires 'token_url'")
+        token_url = token_url.strip()
+        client_id = raw.get("client_id")
+        if not isinstance(client_id, str) or not client_id.strip():
+            raise ValueError(f"{where}.access: source 'oidc' requires 'client_id'")
+        client_id = client_id.strip()
+        scope = raw.get("scope")
+        if scope is not None:
+            if not isinstance(scope, str) or not scope.strip():
+                raise ValueError(
+                    f"{where}.access: 'scope' must be a non-empty string when set"
+                )
+            scope = scope.strip()
+        _https_url(token_url, f"{where}.access", "token_url")
+
     header = str(raw.get("header", "authorization")).strip()
     if not HEADER_NAME.match(header):
         raise ValueError(f"{where}.access: header must be a token like 'Authorization'")
     prefix = str(raw.get("prefix", "Bearer "))
     if any(char in prefix for char in "\r\n"):
         raise ValueError(f"{where}.access: prefix must not contain line breaks")
-    return Access(key=key.strip(), header=header, prefix=prefix)
+    return Access(
+        key=key,
+        header=header,
+        prefix=prefix,
+        source=source,
+        token_url=token_url,
+        client_id=client_id,
+        scope=scope,
+    )
+
+
+def _https_url(url: str, where: str, what: str) -> None:
+    """The one URL rule for anything the gateway calls outside the cluster.
+
+    Shared by the backend endpoint and the OIDC token endpoint so a new field
+    cannot arrive with a weaker check than the one next to it.
+    """
+    parts = urlsplit(url)
+    if parts.scheme != "https":
+        raise ValueError(f"{where}: {what} must use https, got '{url}'")
+    if not parts.hostname:
+        raise ValueError(f"{where}: {what} must name a host")
+    if parts.username or parts.password:
+        raise ValueError(f"{where}: {what} must not embed credentials")
+    if parts.query or parts.fragment:
+        raise ValueError(f"{where}: {what} must not carry a query or fragment")
 
 
 def _external_backend(backend: str, where: str) -> None:
-    parts = urlsplit(backend)
-    if parts.scheme != "https":
-        raise ValueError(f"{where}: external backend must use https, got '{backend}'")
-    if not parts.hostname:
-        raise ValueError(f"{where}: external backend must name a host")
-    if parts.username or parts.password:
-        raise ValueError(f"{where}: external backend must not embed credentials")
-    if parts.query or parts.fragment:
-        raise ValueError(f"{where}: external backend must not carry a query or fragment")
+    _https_url(backend, where, "external backend")
 
 
 def _candidate(raw: dict, where: str) -> Candidate:

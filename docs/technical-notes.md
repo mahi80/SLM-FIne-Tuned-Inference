@@ -301,6 +301,62 @@ unit tests, including a throwaway HTTPS server with a self-signed certificate; n
 provider was called (N-12, R-18). The rationale is in
 [ADR-0009](adr/ADR-0009-external-backends.md).
 
+**Backend credentials.** Stage 2 could only send one static value from the keys file, read
+once at startup, so rotating a provider key meant a restart. `access` now declares *how* the
+credential is obtained, and the key is still a name:
+
+| `source` | What `key` names | When it is read | Rotation |
+|---|---|---|---|
+| `static` (default) | an entry in `Secret/slm-backend-keys` | once, at startup | Secret update + restart |
+| `file` | a file in `SLM_BACKEND_TOKEN_DIR` (default `/app/backend-tokens`) | on every request | the file changes; no restart |
+| `oidc` | a client secret in `Secret/slm-backend-keys` | exchanged at `token_url`, cached per process | token expiry or a 401 |
+
+```yaml
+access:
+  source: oidc
+  key: provider-oidc                 # the client secret, by name
+  token_url: https://idp.example.com/oauth2/token
+  client_id: slm-gateway
+  scope: inference.read              # optional
+```
+
+`token_url`, `client_id` and `scope` are rejected on a `static` or `file` source, `oidc`
+requires the first two, and the token endpoint obeys the same rule as the backend: `https`,
+a host, no userinfo, query or fragment. A `file` key is a file name — letters, digits, `.`,
+`_`, `-` — so a policy cannot name `../secrets` or a subdirectory.
+
+OIDC is the client-credentials grant: a form `POST` with `grant_type`, `client_id`, the
+secret and, when declared, `scope`; the response's `access_token` is cached until
+`now + expires_in - 60` seconds (five-second floor, 300 s assumed when the IdP omits
+`expires_in`). A `401` from a `file` or `oidc` candidate clears the cache and retries that
+candidate **once**; a second `401` is an authentication failure, and a `static` key is never
+retried because the value cannot change in-process. A credential that cannot be obtained is
+a failed attempt — breaker failure, a warning naming the key, the next candidate — and the
+probe loop counts it as down. No exception, log line, 503 detail or metric label contains a
+secret, a token or a header value.
+
+Before sending traffic, one command answers "can this cluster use these candidates":
+
+```text
+$ PYTHONPATH=src python -m tools.check_backend --policy config/policy.yaml \
+      --keys /app/backend-keys/keys.yaml
+OK   alias=slm-small candidate=cloud-static host=inference.provider.example key=external-prod source=static configured probe=up latency_ms=41.2
+FAIL alias=slm-small candidate=cloud-file host=vllm.internal.example.com key=provider-token source=file unconfigured probe=unconfigured latency_ms=0.0
+OK   alias=slm-small candidate=cloud-oidc host=inference.provider.example key=provider-oidc source=oidc configured probe=up latency_ms=118.7
+```
+
+It exits 1 if any candidate is unconfigured, fails authentication (`probe=auth-error`) or
+is down, and it prints key *names* only. Copy-ready snippets for the pool, the three access
+variants and a two-destination egress rule live in `deploy/cloud/examples/`; nothing there is
+applied by an overlay.
+
+None of this was exercised against a real IdP or provider — neither exists here. The OIDC
+exchange, the cache, the 401 retry and the harness are proven with `httpx.MockTransport` and
+a local test server. The token cache is per process and per key, so two replicas would hold
+two tokens; that is acceptable only because the gateway is deliberately one replica. The
+reasoning and the remaining limits (no refresh tokens, no private-key JWT, no mTLS, no
+single-flight) are in [ADR-0010](adr/ADR-0010-backend-credentials.md).
+
 **Air gap.** Mirror the images with `deploy/openshift/airgap/mirror.sh`, apply the
 cluster-scoped `IDMS`/`ITMS` objects with `kubectl apply -k deploy/openshift/airgap`, point
 `deploy/gitops/apps/platform.yaml` at `overlays/airgap`, and seed `slm-model-cache` from the
