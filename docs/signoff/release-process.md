@@ -16,7 +16,7 @@ statement.
 
 Separation is only meaningful if the key is not on the same machine as model training. In
 this reference build both live on one laptop; that is a stated limitation, not a design
-choice ([R-04](risks.md#r-04--static-bearer-keys)).
+choice ([ADR-0007](../adr/ADR-0007-signed-releases.md)).
 
 ## The pipeline
 

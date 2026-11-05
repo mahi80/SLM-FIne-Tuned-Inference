@@ -7,7 +7,8 @@ be taken forward.
 **Verdict:** the architecture is **accepted as a reference platform** with conditions. It is
 **not** a production sign-off for a regulated tenant until the conditions in
 [acceptance.md](acceptance.md#conditions) are closed. Those conditions are linked to risk
-IDs, not to optimism.
+IDs, not to optimism. The newest evidence (A-30) is a dry-run plan for EKS, AKS and GKE, not
+a provisioned cluster: no cloud account was used, and that limit is stated in N-14.
 
 ## Read in this order
 
@@ -38,7 +39,7 @@ make adapter-eval       # base vs adapter v1/v2 on the held-out set
 make bench              # tier benchmark matrix        -> bench/results/
 make eval-gate          # golden-set release gate      -> bench/results/eval-gate.json
 make cost               # ownership cost model         -> bench/results/cost-model.json
-make test               # 100+ unit tests, no cluster required
+make test               # 362 unit tests, no cluster required
 make deploy-validate    # rendered overlays             -> deploy/rendered/
 make release-check      # signed manifest == deployment tree
 make signoff            # runs the above checks and rewrites evidence.json
@@ -76,4 +77,5 @@ GPU, and `make test` / `make release-check` run without a cluster.
 | Scope | 1–8B open-weight models, one fine-tuned task, three compute tiers |
 | Out of scope | frontier-model training, multi-tenant GPU sharing, real cloud deployment, UI |
 | Review state | self-assessed reference architecture; no external assessor |
+| Last review | 2026-11-05 — pack cross-checked against `b1bd4a0` (CI run `41955890300`); record in [acceptance.md](acceptance.md#sign-off-record) |
 | Change rule | a release, policy or threat-model change re-runs `make signoff` and updates this pack |

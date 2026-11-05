@@ -54,8 +54,8 @@ registry withdraws the manifest, pulls fail loudly rather than silently changing
 different bytes under the same digest would require breaking SHA-256. The public GHCR
 packages and the upstream registry remain trusted third parties (see R-03).
 
-**Closure.** C-02 is closed by A-22. Adding image signatures or attestations and a scanning
-proxy remains C-09.
+**Closure.** C-02 is closed by A-22. Image signatures or attestations are not part of this
+build; dependency and image scanning is C-09.
 
 ### R-03 — Upstream artifact compromise
 
@@ -138,7 +138,7 @@ the single replica is the honest design.
 
 ### R-09 — No live OpenShift validation
 
-**What exists.** Three overlays render and pass 60+ static assertions; 43 deployment tests
+**What exists.** Three overlays render and pass 60+ static assertions; 82 deployment tests
 cover the failure modes that matter; Kyverno policies and Argo CD applications are committed.
 A kind v0.33.0 cluster then applied the vanilla overlay, admitted and rejected pods through
 Kyverno v1.19.2, reconciled two Applications with Argo CD v3.6.1, and found one real defect
@@ -306,5 +306,5 @@ a second cluster is installed. Revisit with the first standby cluster and a fail
 
 Five risks are accepted as-is for a reference build: R-13 (artifacts by design), R-15
 (single runtime is the scope), R-05 (no mTLS until there is a cluster), R-08 (single writer is
-documented as a constraint) and R-14 (availability trade-off is deliberate). The remaining
-fourteen require a closing action before regulated production use.
+documented as a constraint) and R-14 (availability trade-off is deliberate). R-02 is closed by
+A-22. The remaining thirteen require a closing action before regulated production use.

@@ -87,10 +87,13 @@ risk accepted for the reference build, not an oversight.
 | Field | Value |
 |---|---|
 | Review type | Self-assessment against the role requirements |
-| Date | 2026-11-04 |
+| Date | 2026-11-05 |
+| Reviewed tree | `b1bd4a0` — 362 tests green, CI run `41955890300`; release `slm-0.5.0` signature verified. `evidence.json` names `a3f265d`, identical to `b1bd4a0` except for the evidence file itself |
+| Scope | requirements, acceptance, risks, operations, release process, evidence, ADRs 0001–0013, README and technical notes |
+| Cross-checks | evidence hashes match the working tree; A-22 digests equal the signed manifest; R-16, R-17 and R-18 residuals remain open |
 | Platform release | latest manifest under [`release/`](../../release) |
 | Evidence snapshot | [evidence.json](evidence.json) |
-| Decision | **Accepted as reference architecture, C-02 closed; C-01 and C-03 to C-10 open** |
+| Decision | **Accepted as reference architecture, C-02 closed; C-01 and C-03 to C-10 open.** A-30 evidences a reviewed bring-up plan, not a provisioned cluster (N-14) |
 | Reviewer | Platform architecture (author) |
 | Independent reviewer | *not yet assigned* |
 

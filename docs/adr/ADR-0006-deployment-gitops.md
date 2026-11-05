@@ -116,8 +116,9 @@ Three properties from earlier phases made the deployment design non-obvious:
 - `python tools/validate_deploy.py` passes all three: image pins, model revision, security
   contexts, resources, probes, Service/policy wiring, ConfigMap equality, single-replica
   gateway, no Secrets, namespace placement, GPU scaling policy, overlay-specific exposure.
-- 43 deployment tests (synthetic negative cases plus rendered-overlay integration); the
-  full suite is 168 tests.
+- 43 deployment tests (synthetic negative cases plus rendered-overlay integration) and 168
+  tests in the full suite, as of this decision; the suite has since grown to 82 deployment
+  tests and 362 total.
 - The GPU tier scales through KEDA on the operator overlays: `config/capacity.yaml` holds the
   bounds and both trigger thresholds, the `ScaledObject` reads vLLM's queue-depth and KV-cache
   gauges, replicas are removed from Git, the model and adapter claims are `ReadWriteMany`, and

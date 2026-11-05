@@ -203,7 +203,7 @@ green.
    Read the budget from the audit record, compare it with the pool `slo` in
    `config/capacity.yaml`, and fix the budget or the route in Git. Only the GPU figures are
    measured; CPU and cloud latencies are modelled, and a measured budget against a modelled
-   route should be reviewed as a calibration gap (R-11), not tuned in the cluster.
+   route should be reviewed as a calibration gap (R-10), not tuned in the cluster.
 
 ### RB-10 — Gateway has no available replica
 
@@ -328,8 +328,8 @@ external candidate, or every request refusing with `backend-unconfigured`. Start
 | Adapter weights | Retrain (`make adapter-train`) or artifact registry | Seed the adapter PVC | No |
 | Signed release | Git | `make release-check` | Yes |
 
-The two "No" rows matter: a restore drill is condition C-04 for audit and part of C-01 for
-the cluster.
+The "No" rows matter: a restore drill is condition C-04 for audit and part of C-01 for the
+cluster, and each secret restore is also a rotation rehearsal.
 
 ## Ownership
 

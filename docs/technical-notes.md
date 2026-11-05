@@ -43,9 +43,9 @@ the distinction explicit:
 | Cloud cluster bring-up (EKS, AKS, GKE) | **Dry-run plans only** — every provider call is printed and statically checked, no account was contacted and no cluster exists | `deploy/cloud/`, `tests/test_cloud_bringup.py`, [A-30](signoff/acceptance.md) |
 | GitOps, release hooks and admission policy | **Admission and Argo verified on kind; hooks unrun** — Kyverno v1.19.2 denials and Argo v3.6.1 self-heal observed | `deploy/gitops`, `deploy/policies`, [A-20](signoff/acceptance.md), [A-21](signoff/acceptance.md) |
 | Signed release manifest (Ed25519, canonical JSON, drift checks) | **Measured** | `make release`, `make release-check`, `release/slm-0.5.0.json` |
-| Image supply (first-party build → GHCR → digest pin) | **Measured (hosted CI + registry)** — images run `41935648483` published three public packages; all four workload images render as `@sha256:`; no cluster pulled them yet | `.github/workflows/images.yml`, [A-22](signoff/acceptance.md) |
+| Image supply (first-party build → GHCR → digest pin) | **Measured (hosted CI + registry)** — images run `41952187982` published three public packages; all four workload images render as `@sha256:`; no cluster pulled them yet | `.github/workflows/images.yml`, [A-22](signoff/acceptance.md) |
 | C4 views, threat model, acceptance and sign-off pack | **Documented** — review artifacts, not runtime evidence | `docs/architecture/c4.md`, `docs/signoff/` |
-| CI pipeline (tests + both validators) | **Verified** — GitHub Actions run `41875084383`, all steps green | `.github/workflows/ci.yml` |
+| CI pipeline (tests + both validators) | **Verified** — GitHub Actions run `41955890300`, all steps green | `.github/workflows/ci.yml` |
 
 Numbers from a simulated tier are labelled `MODELLED` everywhere they appear.
 
@@ -440,7 +440,7 @@ The review pack answers the questions a reviewer actually asks, in order:
 |---|---|
 | [requirements.md](signoff/requirements.md) | What was asked, requirement by requirement, and which ones are not met |
 | [c4.md](architecture/c4.md) | What the system is: L1–L4 views, runtime sequence, trust boundaries |
-| [acceptance.md](signoff/acceptance.md) | What was verified (A-01…A-25), what was not (N-01…N-11), and the conditions (C-01…C-10) |
+| [acceptance.md](signoff/acceptance.md) | What was verified (A-01…A-30), what was not (N-01…N-14), and the conditions (C-01…C-10) |
 | [threat-model.md](signoff/threat-model.md) | What can go wrong, by asset, actor and entry point |
 | [risks.md](signoff/risks.md) | Which risks are accepted, with anchors into the code |
 | [operations.md](signoff/operations.md) | How it runs: SLOs, alerts, runbooks, backups |
