@@ -36,6 +36,9 @@ jobs:
       - name: Deployment validation
         run: python tools/validate_deploy.py
 
+      - name: Fleet inventory
+        run: python tools/fleet_status.py --check
+
       - name: Signed release matches the deployment tree
         run: python -m tools.validate_release
 

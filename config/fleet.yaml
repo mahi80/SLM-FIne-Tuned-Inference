@@ -1,0 +1,28 @@
+# Fleet inventory: which pool lives in which cluster.
+#
+# This file is inventory, not a routing table. Nothing here makes the gateway
+# call another cluster: the router resolves only the candidates in
+# config/policy.yaml, and every one of them runs in the cluster listed as
+# primary below. A pool in another cluster is reachable only through an
+# external candidate that carries its own https endpoint, key and egress rule
+# (ADR-0009); cross-cluster routing, failover and a control plane do not exist
+# (ADR-0012).
+#
+# `context` is a kubeconfig context name, recorded so `make fleet-status` can
+# read node counts with it. The name is inventory; the kubeconfig and its
+# credentials are never read into this file.
+#
+# `role: primary` is where the policy's pools actually run today — exactly one
+# cluster is primary. `standby` means "declared capacity, no traffic": it is a
+# place to put capacity, not a place requests are sent.
+version: 1
+
+clusters:
+  - name: local
+    context: kind-slm
+    role: primary
+    # Optional, and https only: a plaintext control endpoint or userinfo in a
+    # URL would put a credential in Git. Omit it when no external gateway is
+    # published for the cluster.
+    gateway_url: https://gateway.slm-fabric.svc.cluster.local:8000
+    pools: [onprem-gpu, onprem-cpu, cloud-burst]

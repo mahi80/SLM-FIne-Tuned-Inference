@@ -15,6 +15,7 @@ in [adr/](adr/) hold the reasoning behind each choice; these notes collect the s
 - [Fine-tuning: two adapters, one contract](#fine-tuning-two-adapters-one-contract)
 - [Benchmarks, release gates and cost](#benchmarks-release-gates-and-cost)
 - [Latency budget and cost](#latency-budget-and-cost)
+- [Fleet inventory](#fleet-inventory)
 - [Repository map](#repository-map)
 
 ---
@@ -920,6 +921,92 @@ curl -s -X POST http://localhost:8020/v1/policy/explain \
 
 The rationale and the limits — modelled figures, no live p95, a stale release manifest until
 it is re-signed — are in [ADR-0011](adr/ADR-0011-latency-and-cost-admission.md).
+## Fleet inventory
+
+`config/capacity.yaml` says which pools exist; `config/policy.yaml` says who may be routed to
+them. Neither says **where** a pool runs. `config/fleet.yaml` closes that gap: one entry per
+cluster, giving its kube context, its role, the pools that physically live there and,
+optionally, an `https` gateway URL.
+
+```yaml
+version: 1
+clusters:
+  - name: local
+    context: kind-slm
+    role: primary
+    gateway_url: https://gateway.slm-fabric.svc.cluster.local:8000
+    pools: [onprem-gpu, onprem-cpu, cloud-burst]
+```
+
+The file is inventory, not a routing table. `local` (`kind-slm`) is the only cluster that
+exists in this build, and a pool listed under another cluster would still receive no
+traffic: the gateway resolves candidates to Services in the cluster it runs in. Leaving a
+cluster means an external candidate with its own TLS endpoint, key and egress rule
+([ADR-0009](adr/ADR-0009-external-backends.md)), not a fleet-file edit.
+
+### Offline checks
+
+```bash
+make fleet-check   # python tools/fleet_status.py --check
+```
+
+```text
+$ python tools/fleet_status.py --check
+CLUSTER  CONTEXT   ROLE     POOLS  POOL NAMES
+local    kind-slm  primary  3      onprem-gpu, onprem-cpu, cloud-burst
+
+OK fleet 1 clusters / 3 pools
+```
+
+The command exits non-zero and prints every problem it found when:
+
+| Check | Why it is a failure |
+|---|---|
+| duplicate cluster name, or duplicate kube context | two entries would address one cluster, or one entry two |
+| not exactly one `primary`, or a role outside `{primary, standby}` | implies coordination the platform does not have |
+| a cluster naming no pool | an entry that describes nothing |
+| a pool assigned to no cluster, or to two | capacity nobody hosts, or hosted twice |
+| a cluster naming a pool `config/capacity.yaml` does not declare | a typo that would read as extra capacity |
+| a policy candidate routing to a pool no cluster hosts | a route that fails at request time instead of review time |
+| a `gateway_url` that is not `https`, has no host, or carries userinfo, a query or a fragment | a plaintext or credentialed control endpoint committed to Git |
+
+A rejected `gateway_url` is reported without being echoed, so a token pasted into userinfo is
+not repeated into a CI log. CI runs the same check as its `Fleet inventory` step, right after
+the deployment validation, and `make signoff` runs it beside the other gates. Nothing here
+reads a kubeconfig or a Secret: the only cluster-specific value in the output is the context
+name.
+
+### Live node counts
+
+```bash
+make fleet-status   # python tools/fleet_status.py --live
+```
+
+For each cluster that has a context, it runs `kubectl --context <context> get nodes -o json`
+under a 15-second timeout and prints the node count and how many nodes carry
+`nvidia.com/gpu.present=true`:
+
+```text
+CLUSTER  CONTEXT   ROLE     POOLS  POOL NAMES
+local    kind-slm  primary  3      onprem-gpu, onprem-cpu, cloud-burst
+
+OK fleet 1 clusters / 3 pools
+
+LIVE local (kind-slm): 3 node(s), 1 GPU node(s)
+```
+
+A cluster that fails gets its own line (`FAIL local (kind-slm): ...`) and the remaining
+clusters are still visited; the command exits non-zero if any cluster failed or returned zero
+nodes. It is read-only and a census rather than a health check — a `NotReady` node still
+counts, and a node count says nothing about whether the GPU tier is serving. The runner is a
+parameter of `main`, so the suite covers a success, a per-cluster failure, zero nodes and a
+timeout without touching a cluster.
+
+**What is not implemented.** Cross-cluster routing, failover, traffic weighting and a control
+plane do not exist; `role: standby` promotes nothing, and no second cluster was reachable for
+this work. The multi-cluster output shape is proven by unit tests with an injected runner,
+not by a live second cluster. The reasoning, and the limits in full, are in
+[ADR-0012](adr/ADR-0012-fleet-inventory.md).
 
 ---
 

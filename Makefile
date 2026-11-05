@@ -7,6 +7,7 @@ DC := docker compose
         adapter-data adapter-train adapters adapter-eval adapter-smoke \
         bench eval-baseline eval-gate cost \
         deploy-images deploy-render deploy-validate deploy-secret cluster-health \
+        fleet-check fleet-status \
         release-key release-build release-sign release-verify release release-check signoff
 
 help: ## Show available targets
@@ -92,6 +93,12 @@ deploy-secret: ## Create the tenant Secret from the gitignored local file
 cluster-health: ## Check nodes, GPU capacity, endpoints and gateway health in a cluster
 	python scripts/cluster_health.py
 
+fleet-check: ## Check that config/fleet.yaml hosts every pool in exactly one cluster
+	python tools/fleet_status.py --check
+
+fleet-status: ## Read-only node and GPU counts per cluster from config/fleet.yaml
+	python tools/fleet_status.py --live
+
 release-key: ## Generate the Ed25519 release signing keypair (private key is gitignored)
 	PYTHONPATH=src python -m registry keygen
 
@@ -112,6 +119,7 @@ release-check: ## Check that rendered overlays, evidence and compose match the s
 signoff: ## Run every gate and rewrite docs/signoff/evidence.json
 	PYTHONPATH=src python -m unittest discover -s tests
 	python tools/validate_deploy.py
+	python tools/fleet_status.py --check
 	PYTHONPATH=src python -m tools.validate_release
 	PYTHONPATH=src python -m tools.build_signoff
 
