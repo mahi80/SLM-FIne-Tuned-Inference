@@ -136,15 +136,16 @@ More detail: `python scripts/doctor.py` names the exact fix for each FAIL.
 
 ```bash
 make logs          # follow all services
-make test          # 222 unit tests, no GPU or cluster needed
+make test          # 349 unit tests, no GPU or cluster needed
 make smoke-policy  # admission, residency veto, canary stability, audit chain
 make adapter-train # QLoRA v1/v2, then hot-load them (~25 min of GPU)
 make bench         # tier benchmark matrix
 make eval-gate     # golden-set release gate
 make cost          # ownership cost per 1M output tokens
 make release-check # manifest = policy = adapters = overlays = compose
+make fleet-check   # every pool hosted by exactly one declared cluster
 make cluster-health # live cluster: nodes, GPU capacity, endpoints, gateway health
-make signoff       # tests, both validators, signature; rewrites evidence.json
+make signoff       # tests, validators, fleet check, signature; rewrites evidence.json
 ```
 
 ---
@@ -238,7 +239,7 @@ cloud profile is 56,069 requests/day. Method and limits in
 
 ```
 compose.yaml           the whole platform: tiers, gateway, observability
-config/                pool registry, policy, bench, eval gates, cost, release pins, tenant example
+config/                pool registry, fleet inventory, policy, bench, eval gates, cost, release pins
 src/                   gateway, router, tiersim, registry, bench, eval, cost
 finetune/              prompt contract, dataset generator, QLoRA trainer, evaluation
 deploy/                kustomize overlays + cloud-egress, GitOps, Kyverno, node pools
@@ -256,10 +257,10 @@ Full map: [repository map](docs/technical-notes.md#repository-map).
 | If you want | Read |
 |---|---|
 | Evidence, contracts and measurement detail | [docs/technical-notes.md](docs/technical-notes.md) |
-| Why each decision was made | [ADR-0001…0009](docs/adr/) — one record per choice |
+| Why each decision was made | [ADR-0001…0012](docs/adr/) — one record per choice |
 | Cluster deployment and air gap | [Kubernetes and OpenShift](docs/technical-notes.md#kubernetes-and-openshift) |
 | The release and review pack | [Signed releases](docs/technical-notes.md#signed-releases-and-the-review-pack), [docs/signoff/](docs/signoff/) |
-| What was not proven | [acceptance.md](docs/signoff/acceptance.md) — A-01…A-26, N-01…N-12, C-01…C-10 |
+| What was not proven | [acceptance.md](docs/signoff/acceptance.md) — A-01…A-29, N-01…N-13, C-01…C-10 |
 
 ---
 

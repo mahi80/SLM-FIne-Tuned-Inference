@@ -18,7 +18,7 @@ document names what crosses them and what would happen if it did.
 | Adapter weights | The fine-tuned behaviour; a swapped adapter is a silent product change | `adapters/triage-*` → adapter PVC |
 | Signed release manifest | The authoritative statement of what is deployed | `release/*.json` + `.sig` |
 | Signing key | Authority to publish a release | Local file today; HSM/KMS in production |
-| External backend keys | Authenticate the gateway to a cloud inference provider; spend bearer authority | `Secret/slm-backend-keys`, mounted at `/app/backend-keys`; never in Git or the policy |
+| External backend keys | Authenticate the gateway to a cloud inference provider; spend bearer authority; for OIDC, the client secret exchanged at the IdP | `Secret/slm-backend-keys`, mounted at `/app/backend-keys`; rotating file tokens under `SLM_BACKEND_TOKEN_DIR`; never in Git or the policy |
 | Backend CA bundle (optional) | What the gateway trusts when it calls an external backend | `ConfigMap/slm-backend-ca` → `SLM_BACKEND_CA`; absent means the system trust store |
 
 ## Actors
@@ -62,7 +62,9 @@ document names what crosses them and what would happen if it did.
 | **S**poofing | An external endpoint is impersonated or intercepted | Gateway → cloud | External candidates must be `https`, with no userinfo, query or fragment; verification uses the system trust store or an operator-pinned CA, and a missing configured bundle fails startup rather than falling back to plaintext | A compromised or over-broad operator CA bundle would allow interception — R-18 |
 | **S**poofing | Another in-namespace workload calls the provider as if it were the gateway | In-namespace → cloud | The egress rule selects only gateway pods, so no other pod in the namespace can reach the external host; backend keys are mounted only into the gateway | A pod that can read the Secret can still use the key if it gains egress by another route — R-18 |
 | **I**nformation disclosure | The opt-in egress rule is widened to the internet or to private ranges | `cloud-egress` → validator | The validator rejects `0.0.0.0/0`, private, loopback and link-local ranges, non-443 ports, pod-selector peers and an empty rule set; the airgap overlay forbids the policy outright | A provider CIDR that overlaps a shared proxy or CDN widens the path; the validator cannot know the provider's topology |
-| **D**enial of service | An external backend is down, slow or misconfigured | Gateway → cloud | The probe loop feeds the same per-`alias:candidate` breakers as traffic; 5xx and transport failures open the breaker, 4xx counts as reachable; an unconfigured key vetoes the candidate before scoring | The probe is interval-bound and best-effort; in-flight requests still wait out the timeout — R-18 |
+| **D**enial of service | An external backend is down, slow or misconfigured | Gateway → cloud | The probe loop feeds the same per-`alias:candidate` breakers as traffic; 5xx and transport failures open the breaker, 4xx counts as reachable; an unconfigured key vetoes the candidate before scoring. An OIDC credential that cannot be obtained counts as down, and a 401 on a rotating or OIDC credential gets one refresh and retry | The probe is interval-bound and best-effort; in-flight requests still wait out the timeout — R-18 |
+| **I**nformation disclosure | An OIDC client secret is sent to an attacker-controlled token endpoint | Policy → gateway → `token_url` | `token_url` is https, reviewed in the signed policy, and reached only through the narrow egress rule; the client secret lives in `Secret/slm-backend-keys`, never in the policy, and a credential failure names only the key and a status | A policy edit that changes `token_url` and widens egress can exfiltrate the client secret. Review and the signed policy are the control, as they are for a changed `backend` — R-07, R-18 |
+| **S**poofing | An IdP token endpoint is impersonated | Gateway → IdP | The same TLS verification as a backend call: the system trust store or an operator-pinned CA, and a configured-but-missing bundle stops the gateway rather than trusting public roots | A compromised or over-broad CA bundle would allow token interception — R-18 |
 | **I**nformation disclosure | Prompt secrets forwarded to a tier | B3/B4 | Audited routing decision; no DLP | Content is not inspected — [R-06](risks.md#r-06--prompt-content-is-not-inspected) |
 | **I**nformation disclosure | Cross-tenant data in adapters or cache | GPU | Single-tenant platform deployment; adapters are global, not per tenant | Multi-tenant shared adapter use would need per-tenant adapter isolation; out of scope today |
 | **I**nformation disclosure | Audit log leaks prompt content | Audit volume | Records contain metadata and token counts only, never message text | Deliberate: limits forensic content review |
@@ -115,6 +117,14 @@ the validator refuses an ambiguous or private CIDR, and an external candidate wi
 component (or the component without a candidate) fails CI. The remaining path is a reviewer
 approving a wrong hostname, which is the same class of failure as R-07.
 
+**Goal: extract the OIDC client secret.**
+Requires (a) a policy edit that points `access.token_url` at a host the attacker controls, (b) an
+egress rule that reaches that host, and (c) the key name in the candidate resolving in
+`Secret/slm-backend-keys`, so a real client secret is exchanged. The policy is signed and
+reviewed, the egress CIDR is validated and reviewed, and the secret never appears in the policy
+itself. The remaining path is the same review failure as changing a `backend` host, and the
+blast radius is the credential, not tenant prompt content.
+
 ## Out of scope
 
 - Kubernetes control-plane compromise, etcd access, or node-level root.
@@ -126,7 +136,8 @@ approving a wrong hostname, which is the same class of failure as R-07.
 ## Review triggers
 
 Re-run this threat model when: a second runtime or gateway replica is added, an external
-backend is first pointed at a real provider (Stage 2 shipped the path, not a provider — R-18),
-a new data class is allowed to leave the cluster, adapter weights move to a registry, OIDC
-replaces static keys, or the audit head is shipped externally. Each of those changes moves a
-boundary, not just a configuration value.
+backend or an IdP token endpoint is first pointed at a real provider (the paths exist, no live
+endpoint does — R-18), a second cluster joins the fleet (R-19), a new data class is allowed to
+leave the cluster, adapter weights move to a registry, OIDC replaces the tenant's static bearer
+keys, or the audit head is shipped externally. Each of those changes moves a boundary, not
+just a configuration value.

@@ -24,6 +24,7 @@ Each entry says what exists today, what is left after mitigation, and which cond
 | [R-16](#r-16--no-dependency-or-image-scanning) | No dependency or image scanning in CI | Medium | High | **High** | C-09 |
 | [R-17](#r-17--cloud-pools-are-declared-but-not-reachable) | Cloud pools are declared but not reachable | Medium | Medium | Medium | C-01 |
 | [R-18](#r-18--external-backend-path-is-unproven-against-a-provider) | External backend path is unproven against a real provider | Medium | High | **High** | C-01 |
+| [R-19](#r-19--fleet-inventory-has-no-second-cluster) | Fleet inventory has no second cluster to prove it | High | Low | Medium | — |
 
 ---
 
@@ -268,17 +269,36 @@ default, private and non-443 egress. `tests/test_backends.py` exercises TLS veri
 against a throwaway self-signed server.
 
 **Residual.** No live cloud endpoint was called, so provider-side authentication, DNS,
-egress enforcement, certificate rotation and rate limits are unobserved. Bearer keys are
-static: rotation is a Secret update plus a gateway restart, because the keys file is read at
-startup. There is no per-tenant cap on external spend or egress volume.
+egress enforcement, certificate rotation and rate limits are unobserved. Credentials can now
+rotate without a restart (`source: file`) or be exchanged for short-lived tokens
+(`source: oidc`), but static keys remain the default for providers that issue them, and no
+IdP or token endpoint was contacted: the exchange, cache and 401 retry are proven against a
+mocked transport. There is no per-tenant cap on external spend or egress volume.
 
 **Closure.** One provider route in a staging account, with a rotation rehearsal and a
-sustained probe/failover record (C-01). A workload-identity mode and a per-pool cost/latency
-budget are the following slices.
+sustained probe/failover record (C-01). A real IdP and a per-tenant spend cap are the
+following slices.
+
+### R-19 — Fleet inventory has no second cluster
+
+**What exists.** `config/fleet.yaml` assigns every pool to exactly one declared cluster,
+`make fleet-check` fails on a duplicate context, a second or missing primary, an unhosted or
+double-hosted pool, a candidate whose pool is unhosted, or a non-https gateway URL, and CI
+runs that check. `tools/fleet_status.py --live` reads node and GPU counts per context under a
+timeout and isolates per-cluster failures.
+
+**Residual.** Only one cluster exists in this build, so the multi-cluster table is proven by
+tests with an injected runner, not by a live second cluster. `role: standby` promotes nothing,
+and cross-cluster routing, failover, traffic weighting and a control plane are not
+implemented: a pool in another cluster receives no traffic without an external candidate with
+its own TLS, key and egress rule (ADR-0009).
+
+**Closure.** No condition closes this today; it is an inventory that becomes meaningful when
+a second cluster is installed. Revisit with the first standby cluster and a failover drill.
 
 ## Accepted risks summary
 
 Five risks are accepted as-is for a reference build: R-13 (artifacts by design), R-15
 (single runtime is the scope), R-05 (no mTLS until there is a cluster), R-08 (single writer is
 documented as a constraint) and R-14 (availability trade-off is deliberate). The remaining
-thirteen require a closing action before regulated production use.
+fourteen require a closing action before regulated production use.

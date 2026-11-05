@@ -75,7 +75,9 @@ without waiting for a rule to fire.
 EU confidential tenants go to the CPU tier; US internal tenants may use the cloud standby.
 
 1. Confirm the scope: `kubectl -n slm-fabric get pods -l app.kubernetes.io/name=vllm-gpu` (or
-   `docker compose ps vllm-gpu`).
+   `docker compose ps vllm-gpu`). If `config/fleet.yaml` lists more than one cluster,
+   `python tools/fleet_status.py --live` says which cluster hosts `onprem-gpu` and how many
+   GPU nodes it reports — it is read-only and prints no kubeconfig or credential.
 2. Check the cause: driver/host reboot, OOM-killed pod, GPU in use by another process. The
    container log is the first place; VRAM pressure appears as an engine init failure.
 3. Do **not** disable tenant policy to force traffic to the cloud tier. Residency rules are
@@ -196,6 +198,12 @@ green.
    tokens, but a misconfiguration can raise it.
 4. If the load exceeds the owned node, the cost model's break-even (~56k requests/day vs the
    cloud L4 profile) is the decision input — not an ad-hoc cloud enablement.
+5. A refusal with reason `latency-budget-exceeded` is not degradation: the tenant set
+   `latency_budget_ms` and every admissible candidate's declared `latency_ms` is above it.
+   Read the budget from the audit record, compare it with the pool `slo` in
+   `config/capacity.yaml`, and fix the budget or the route in Git. Only the GPU figures are
+   measured; CPU and cloud latencies are modelled, and a measured budget against a modelled
+   route should be reviewed as a calibration gap (R-11), not tuned in the cluster.
 
 ### RB-10 — Gateway has no available replica
 
@@ -260,12 +268,24 @@ external candidate, or every request refusing with `backend-unconfigured`. Start
 `GET /health`: it lists external candidate names under `external.configured` and
 `external.unconfigured`. It never lists keys.
 
-1. **Unconfigured** — the candidate is vetoed before any network call. Check that
-   `Secret/slm-backend-keys` exists and that `keys.yaml` contains the `access.key` named in
-   the policy:
-   `kubectl -n slm-fabric get secret slm-backend-keys -o jsonpath='{.data.keys\.yaml}' | base64 -d | sed 's/:.*/: <redacted>/'`.
-   Never print the values into a ticket or chat. Fix the Secret, then restart the gateway:
-   the keys file is read once at startup.
+1. **Unconfigured** — the candidate is vetoed before any network call. Which fix applies
+   depends on `access.source` in the policy:
+   * `static` (the default) — `Secret/slm-backend-keys` must exist and `keys.yaml` must
+     contain the `access.key`. The file is read once at startup, so fix the Secret and
+     restart the gateway:
+     `kubectl -n slm-fabric get secret slm-backend-keys -o jsonpath='{.data.keys\.yaml}' | base64 -d | sed 's/:.*/: <redacted>/'`.
+     Never print the values into a ticket or chat.
+   * `file` — `access.key` names a file under `SLM_BACKEND_TOKEN_DIR` (default
+     `/app/backend-tokens`). It is read on every request, so a missing file is a missing
+     volume, not a stale process: check the projected-token volume and its mount, not the
+     Secret. Creating the file is enough — no restart.
+   * `oidc` — `access.key` is the client secret, read at exchange time like `static`. Fix the
+     Secret with a rolling restart; a client secret that is present but rejected surfaces
+     as `down` (the exchange failed), not `unconfigured`.
+   Run `PYTHONPATH=src python -m tools.check_backend --policy config/policy.yaml --keys
+   /app/backend-keys/keys.yaml` before shifting tenant traffic: one line per external
+   candidate with its source, configured state and probe result, exit 1 if any candidate is
+   unconfigured, fails authentication or is down. It prints key names, never values.
 2. **Down** — `gateway_backend_probe_total{result="down"}` rising means the probe's
    `GET /health` either got a 5xx or failed at transport/TLS level. A 4xx is treated as
    reachable, so a 401/403 from the provider usually means the key was revoked, not that the
@@ -283,9 +303,18 @@ external candidate, or every request refusing with `backend-unconfigured`. Start
    current public range. `NetworkPolicy` cannot express a DNS name; a range change is a
    manifest change. Private endpoints are reached as in-cluster/peered addresses and do not
    need this rule.
-5. **After an incident** — rotate the key at the provider, update the Secret, restart, and
-   confirm the probe counter turns `up` before removing the incident tag. Rotation is a
-   restart today (R-18).
+5. **After an incident** — rotate the credential at the provider, then by source:
+   * `static` — update the Secret and do a rolling restart; the keys file is read once.
+   * `file` — replace the projected file (a service-account token rotates in place). No
+     restart and no reload: the next request reads the new value, and a `401` triggers one
+     refresh-and-retry before the attempt is counted as a failure.
+   * `oidc` — rotate the client secret in the Secret and restart. A cached access token is
+     reused until ~60 s before it expires; a `401` clears the cache and retries once, which
+     also covers a token that was revoked early at the IdP.
+
+   Confirm the probe counter turns `up` before removing the incident tag. Rotation only
+   works without a restart for `file`; `static` and `oidc` are restarts (R-18), and no path
+   here has been exercised against a real provider or IdP (N-13).
 
 ## Backup and restore
 
@@ -293,7 +322,7 @@ external candidate, or every request refusing with `backend-unconfigured`. Start
 |---|---|---|---|
 | Routing policy | Git | Revert + reload | Yes, in drills |
 | Tenant keys | Secret in the cluster's secret store (not Git) | Recreate with `make deploy-secret` | No |
-| External backend keys | Secret in the cluster's secret store (not Git) | Recreate `slm-backend-keys`; restart the gateway to reread | No |
+| External backend keys | Secret in the cluster's secret store (not Git) | Recreate `slm-backend-keys`; restart the gateway to reread (`oidc` and `static`). A `file` token needs no restore step beyond its volume | No |
 | Audit trail | Volume snapshot + external head hash | Restore file; verify chain | No |
 | Model weights | Re-download (connected) or mirror (air gap) | Seed the model PVC | Partially (connected) |
 | Adapter weights | Retrain (`make adapter-train`) or artifact registry | Seed the adapter PVC | No |
