@@ -5,11 +5,11 @@
     "bench/results/eval-gate.json": "9a4099b63ed005807ef9f5e19963a6bd76718e5663b741e974322e478e413f28",
     "bench/results/tier-comparison.json": "c76ce75ac07c4ba856a69a4555ff41ea16a8c0e3af15cbc535a7ef146be39e52",
     "compose.yaml": "e1c8212639e6d562fdf42d79b984fae1550a31b3e441ed7f3263447e77df23a7",
-    "config/capacity.yaml": "6bbecf0b801a20e1ad1b576b0cbb54a8a182725f8338b6e90354ec66287194c5",
+    "config/capacity.yaml": "414524ea048f9b0eacba4f4c1a5d319409c34583c51f82e79588485163b4a06a",
     "config/cost.yaml": "fc9bfb7777ae5b703732d9d9954f80d1026fdc1e226166e9104f1d61bc434622",
     "config/eval-gates.yaml": "50fee941f061743c74fd0ae2f8bb0511ee85cbf8f7be69d445ed19321ae2842e",
-    "config/policy.yaml": "467738c0a97fabd53345fa43210b780a8ab3412eb4803f2dd6e0f400bbb2b6cc",
-    "config/release.yaml": "f855d297d78ad79fffe234e533c9a905732bfe207e9151aca0c0df8b2d23703f",
+    "config/policy.yaml": "71de9e326c827af5ecedf9a33ef2ea2479d005c127b5ed5c6bb30f29704a4c2b",
+    "config/release.yaml": "31aa3e5136ae4668e0b447e0fc58d3ee23ec042cac99559a1a61f5af8d5aee6c",
     "src/eval/golden.jsonl": "819c526a4406cb3a2a2b820fa535c3f7b8ad84aa10ea780abc3092a857acce39"
   },
   "environment": {
@@ -17,7 +17,7 @@
     "platform": "Windows-11-10.0.26200-SP0",
     "python": "3.12.10"
   },
-  "generated_at": "2026-11-05T01:38:45Z",
+  "generated_at": "2026-11-05T02:02:09Z",
   "notes": [
     "Artifacts are hashed as they exist in the working tree at generation time.",
     "The release signature is verified against the committed public key, not a trust root.",
@@ -34,7 +34,7 @@
         "sha256": "a459129539cf1573736a011ae172f6e2e88c24366e597d4c5828ce3ab4fca159"
       }
     ],
-    "canonical_sha256": "363270718a0902d8354ec312f36c87d5d177ba53c536e02f93407150c087328d",
+    "canonical_sha256": "793775b095af990a13ba5b01a13b246f34410754f9af95b59add76a38fb7360c",
     "gate": {
       "checks_total": 13,
       "metrics": {
@@ -63,7 +63,7 @@
       "passed": true
     },
     "manifest": "release/slm-0.5.0.json",
-    "manifest_sha256": "2588c9e3e434a6ac99f545fde6f8ebb225fef4a865fd48919dea7f3282982554",
+    "manifest_sha256": "c7a2a8537be6ed357f5cfded6295fbff016fb74f31a9de08361432b16891fcd9",
     "model": {
       "base_id": "Qwen/Qwen3-4B-Instruct-2507",
       "id": "cyankiwi/Qwen3-4B-Instruct-2507-AWQ-4bit",
@@ -71,21 +71,21 @@
       "revision": "b37d1ccb77e27a70fe4222d995fda27940eead5a",
       "served_name": "slm-small"
     },
-    "policy_version": "2026-11-04.1",
+    "policy_version": "2026-11-05.1",
     "release_id": "slm-0.5.0",
     "signature": "slm-0.5.0.json.sig",
     "signature_detail": "signature verified",
     "signature_verified": true
   },
   "source": {
-    "commit": "aaa20711456d05567883a7c9bbb7f71878535f39",
+    "commit": "514e2c9c95db3a85377b4b234e59b5e626d1b6bf",
     "dirty": true
   },
   "tests": {
     "errors": 0,
     "failures": 0,
     "ok": true,
-    "ran": 222,
+    "ran": 349,
     "skipped": 0
   }
 }
