@@ -72,6 +72,11 @@ BACKEND_PROBE = Counter(
     "Health probes of external backends, by outcome",
     ["alias", "candidate", "result"],
 )
+SEMANTIC_CACHE = Counter(
+    "gateway_semantic_cache_total",
+    "Semantic cache outcomes: hit, miss, store, or skip (request not cacheable)",
+    ["alias", "result"],
+)
 
 
 def render() -> Response:

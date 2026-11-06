@@ -66,6 +66,11 @@ spec:
             - "16"
             - --gpu-memory-utilization
             - "0.85"
+            # Reuse KV blocks for a shared prompt prefix (system prompt, few-shot
+            # block, RAG preamble) instead of re-running its prefill. vLLM V1 turns
+            # this on by default; it is explicit so a runtime bump that changes the
+            # default cannot silently remove it. `make bench-prefix` measures it.
+            - --enable-prefix-caching
             # Rank 16 matches the QLoRA config. Four slots leave room for a
             # canary adapter next to the primary during a promotion.
             - --enable-lora

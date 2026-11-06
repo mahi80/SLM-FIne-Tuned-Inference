@@ -23,7 +23,9 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install pyyaml==6.0.3 httpx==0.28.1
+        # fastapi + prometheus-client let the gateway integration tests run
+        # the real app (semantic cache) instead of skipping.
+        run: pip install pyyaml==6.0.3 httpx==0.28.1 fastapi==0.162.0 prometheus-client==0.26.0
 
       # Rendering the overlays is the only reason this job needs kubectl.
       - uses: azure/setup-kubectl@v4

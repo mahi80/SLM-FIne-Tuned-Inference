@@ -5,7 +5,7 @@ DC := docker compose
 
 .PHONY: help env doctor gpu-check build up down logs ps test smoke smoke-gateway smoke-policy metrics health health-gateway clean \
         adapter-data adapter-train adapters adapter-eval adapter-smoke \
-        bench eval-baseline eval-gate cost \
+        bench bench-prefix eval-baseline eval-gate cost \
         deploy-images deploy-render deploy-validate deploy-secret cluster-health \
         fleet-check fleet-status \
         release-key release-build release-sign release-verify release release-check signoff
@@ -53,6 +53,10 @@ test: ## Run the router, eval, cost, deployment and release unit tests
 
 bench: ## Run the tier benchmark matrix (writes bench/results)
 	PYTHONPATH=src python -m bench
+
+bench-prefix: ## Measure prefix-cache TTFT savings (shared vs unique system prompt)
+	PYTHONPATH=src python -m bench --only gpu-direct,adapter-v2 --concurrency 1 --requests 4 \
+		--prefix-probe --out bench/results/prefix-cache.json --markdown bench/results/prefix-cache.md
 
 eval-baseline: ## Record the current candidate as the drift baseline
 	PYTHONPATH=src python -m eval --no-gate --out bench/results/eval-baseline.json

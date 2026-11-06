@@ -22,6 +22,7 @@ TENANT_KEYS = {
     "allow_cloud",
     "latency_budget_ms",
     "admin",
+    "semantic_cache",
 }
 
 
@@ -39,6 +40,9 @@ class Tenant:
     allow_cloud: bool = False
     admin: bool = False
     latency_budget_ms: int = 0
+    # Opt-in: serve near-duplicate deterministic requests from the gateway's
+    # semantic cache (src/gateway/semantic_cache.py).
+    semantic_cache: bool = False
 
 
 def _string_list(value, field: str, tenant_id: str) -> tuple[str, ...]:
@@ -113,6 +117,7 @@ def load_tenants(path: str) -> list[Tenant]:
                 allow_cloud=bool(item.get("allow_cloud", False)),
                 admin=bool(item.get("admin", False)),
                 latency_budget_ms=latency_budget_ms,
+                semantic_cache=bool(item.get("semantic_cache", False)),
             )
         )
     if not tenants:

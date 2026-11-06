@@ -7,7 +7,9 @@ Phase 3 replaced the static alias table with a policy engine:
 * one primary per alias, deterministic canaries, standbys only when the
   primary is not admissible;
 * per-candidate circuit breakers, half-open probing, transport fallback;
-* hash-chained audit records, one per request plus one per shadow call.
+* hash-chained audit records, one per request plus one per shadow call;
+* an opt-in, per-tenant semantic cache in front of all of it (see
+  semantic_cache.py) for deterministic near-duplicate requests.
 
 Routing decisions are explained on demand so a canary or veto can be
 reproduced without reading the audit file by hand.
@@ -42,6 +44,13 @@ from .backends import (
     probe,
 )
 from .config import Tenant, load_tenants
+from .semantic_cache import (
+    HashingEmbedder,
+    HttpEmbedder,
+    SemanticCache,
+    as_sse,
+    completion_from_stream,
+)
 
 POLICY_FILE = os.environ.get("POLICY_FILE", "/app/config/policy.yaml")
 TENANTS_FILE = os.environ.get("TENANTS_FILE", "/app/config/tenants.yaml")
@@ -51,6 +60,16 @@ BACKEND_CA_FILE = os.environ.get("SLM_BACKEND_CA") or None
 # Rotating tokens live in SLM_BACKEND_TOKEN_DIR (read by BackendAccess.load),
 # default /app/backend-tokens, one file per `access.key` with source: file.
 PROBE_INTERVAL_S = float(os.environ.get("SLM_PROBE_INTERVAL_S", "30"))
+# Semantic cache. Tenants opt in; these knobs are shared. Without
+# SLM_EMBEDDINGS_URL the local trigram embedder is used.
+EMBEDDINGS_URL = os.environ.get("SLM_EMBEDDINGS_URL") or None
+EMBEDDINGS_MODEL = os.environ.get("SLM_EMBEDDINGS_MODEL", "embed-small")
+semantic_cache = SemanticCache(
+    embedder=HashingEmbedder(),
+    threshold=float(os.environ.get("SLM_SEMANTIC_CACHE_THRESHOLD", "0.92")),
+    ttl_s=float(os.environ.get("SLM_SEMANTIC_CACHE_TTL_S", "600")),
+    max_entries=int(os.environ.get("SLM_SEMANTIC_CACHE_MAX_ENTRIES", "2048")),
+)
 
 access = BackendAccess.load(BACKEND_KEYS_FILE, BACKEND_CA_FILE)
 store = PolicyStore(POLICY_FILE, backend_ready=access.ready)
@@ -123,6 +142,13 @@ async def lifespan(app: FastAPI):
         verify=access.verify,
     )
     app.state.shadow_tasks = set()
+    if EMBEDDINGS_URL:
+        semantic_cache.embedder = HttpEmbedder(
+            EMBEDDINGS_URL,
+            EMBEDDINGS_MODEL,
+            app.state.client,
+            os.environ.get("SLM_EMBEDDINGS_API_KEY") or None,
+        )
     app.state.probe_task = asyncio.create_task(probe_external_backends(app))
     try:
         yield
@@ -423,6 +449,59 @@ def policy_view(policy: Policy) -> dict:
     }
 
 
+def serve_cache_hit(
+    hit, *, alias: str, tenant: Tenant, request_id: str, stream: bool, decision, started: float
+):
+    """Answer from the semantic cache: no upstream call, no GPU time."""
+    response = dict(hit.response, id=f"chatcmpl-{request_id}")
+    usage = response.get("usage") or {}
+    elapsed = time.perf_counter() - started
+    metrics.SEMANTIC_CACHE.labels(alias, "hit").inc()
+    metrics.REQUESTS.labels(alias, "cache", "200").inc()
+    metrics.REQUEST_DURATION.labels(alias, "cache").observe(elapsed)
+    write_audit(
+        {
+            "event": "inference",
+            "request_id": request_id,
+            "tenant": tenant.id,
+            "alias": alias,
+            "tier": "cache",
+            "candidate": None,
+            "decision": "cache",
+            "policy_version": decision.policy_version,
+            "stream": stream,
+            "status": "200",
+            "prompt_tokens": usage.get("prompt_tokens", 0),
+            # Nothing was generated for this request.
+            "completion_tokens": 0,
+            "cached_completion_tokens": usage.get("completion_tokens", 0),
+            "cache_similarity": hit.similarity,
+            "cache_age_s": hit.age_s,
+            "latency_ms": round(elapsed * 1000, 1),
+            "est_cost_usd": 0.0,
+        }
+    )
+    headers = {
+        "x-request-id": request_id,
+        "x-tier": "cache",
+        "x-route-alias": alias,
+        "x-route-reason": "semantic-cache",
+        "x-policy-version": decision.policy_version,
+        "x-cache": "hit",
+        "x-cache-similarity": str(hit.similarity),
+        "x-cache-age-s": str(hit.age_s),
+    }
+    if stream:
+        async def replay():
+            for event in as_sse(response):
+                yield event
+
+        return StreamingResponse(
+            replay(), media_type="text/event-stream", headers={**headers, **STREAM_HEADERS}
+        )
+    return JSONResponse(content=response, headers=headers)
+
+
 @app.get("/health")
 async def health() -> dict:
     snapshot = store.breakers.snapshot()
@@ -639,6 +718,25 @@ async def chat_completions(
             ),
         )
 
+    # Semantic cache, after admission so a hit never bypasses residency, data
+    # class or alias vetoes. The namespace includes the chosen candidate, so a
+    # canary and its primary never answer for each other.
+    lookup = None
+    if getattr(tenant, "semantic_cache", False):
+        lookup = SemanticCache.prepare(
+            body, tenant.id, alias, f"{decision.policy_version}:{decision.chosen.name}"
+        )
+        if lookup is None:
+            metrics.SEMANTIC_CACHE.labels(alias, "skip").inc()
+        else:
+            hit = await semantic_cache.get(lookup)
+            if hit is not None:
+                return serve_cache_hit(
+                    hit, alias=alias, tenant=tenant, request_id=request_id,
+                    stream=stream, decision=decision, started=state["started"],
+                )
+            metrics.SEMANTIC_CACHE.labels(alias, "miss").inc()
+
     schedule_shadow(
         request.app, body=body, decision=decision, tenant=tenant, request_id=request_id
     )
@@ -786,16 +884,45 @@ async def chat_completions(
         state["prompt_tokens"] = usage.get("prompt_tokens", state["prompt_tokens"])
         state["completion_tokens"] = usage.get("completion_tokens", 0)
         finish("200", sim_headers)
+        if lookup is not None and not state["fallback"]:
+            # A fallback answer came from a degraded route; do not pin it.
+            await semantic_cache.put(lookup, data)
+            metrics.SEMANTIC_CACHE.labels(alias, "store").inc()
+        if lookup is not None:
+            headers["x-cache"] = "miss"
         return JSONResponse(content=data, headers=headers)
+
+    if lookup is not None:
+        headers["x-cache"] = "miss"
 
     async def relay():
         streamed_tokens = 0
+        text: list[str] = []
+        finish_reason = None
         try:
             async for line in upstream.aiter_lines():
                 if not line or not line.startswith("data:"):
                     continue
                 data_str = line[5:].strip()
                 if data_str == "[DONE]":
+                    if lookup is not None and not state["fallback"] and text:
+                        await semantic_cache.put(
+                            lookup,
+                            completion_from_stream(
+                                request_id,
+                                alias,
+                                "".join(text),
+                                finish_reason,
+                                {
+                                    "prompt_tokens": state["prompt_tokens"],
+                                    "completion_tokens": state["completion_tokens"]
+                                    or streamed_tokens,
+                                    "total_tokens": state["prompt_tokens"]
+                                    + (state["completion_tokens"] or streamed_tokens),
+                                },
+                            ),
+                        )
+                        metrics.SEMANTIC_CACHE.labels(alias, "store").inc()
                     yield b"data: [DONE]\n\n"
                     return
                 try:
@@ -816,10 +943,13 @@ async def chat_completions(
                     continue
                 if choices:
                     delta = choices[0].get("delta") or {}
+                    finish_reason = choices[0].get("finish_reason") or finish_reason
                     if delta.get("content"):
                         if state["ttft"] is None:
                             state["ttft"] = time.perf_counter() - state["started"]
                         streamed_tokens += 1
+                        if lookup is not None:
+                            text.append(delta["content"])
                 yield f"data: {json.dumps(chunk)}\n\n".encode()
         except asyncio.CancelledError:
             state["status"] = "499"

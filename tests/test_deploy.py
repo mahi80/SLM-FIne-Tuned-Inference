@@ -105,6 +105,34 @@ class ImageChecks(unittest.TestCase):
         self.assertTrue(any("is not pinned by digest" in error for error in errors))
 
 
+class ModelPinChecks(unittest.TestCase):
+    def vllm(self, *extra):
+        args = [
+            "model",
+            "--revision",
+            vd.MODEL_REVISION,
+            "--served-model-name",
+            vd.SERVED_MODEL_NAME,
+            "--enable-lora",
+            *extra,
+        ]
+        return deployment(name="vllm-gpu", image=f"{vd.VLLM_IMAGE}@{DIGEST}", args=args)
+
+    def test_prefix_caching_required(self):
+        errors = vd.check_model_pin([self.vllm()])
+        self.assertTrue(any("prefix caching" in e for e in errors), errors)
+
+    def test_pinned_engine_with_prefix_caching_passes(self):
+        self.assertEqual(vd.check_model_pin([self.vllm("--enable-prefix-caching")]), [])
+
+    def test_base_manifest_enables_prefix_caching(self):
+        base = yaml.safe_load(
+            (REPO / "deploy/kustomize/base/vllm/deployment.yaml").read_text(encoding="utf-8")
+        )
+        args = base["spec"]["template"]["spec"]["containers"][0]["args"]
+        self.assertIn("--enable-prefix-caching", args)
+
+
 class SecurityChecks(unittest.TestCase):
     def test_pod_must_be_restricted(self):
         errors = vd.check_security([deployment(pod_security={})])
