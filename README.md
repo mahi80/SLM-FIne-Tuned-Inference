@@ -173,7 +173,9 @@ Every response carries its decision: `x-tier`, `x-route-reason`, `x-policy-versi
 flowchart LR
   C[Client / app] -->|OpenAI API| GW[Gateway<br/>auth · quota · audit]
   GW --> RT{Router<br/>policy engine}
-  RT -->|interactive, long decode| GPU[GPU tier<br/>vLLM · multi-LoRA]
+  RT -->|admitted, temperature 0| SC[(Semantic cache<br/>opt-in per tenant)]
+  SC -.->|hit: no GPU call| C
+  RT -->|interactive, long decode| GPU[GPU tier<br/>vLLM · multi-LoRA<br/>prefix cache · paged KV]
   RT -->|short, bulk, low QPS| CPU[CPU tier<br/>OpenVINO / llama.cpp]
   RT -->|overflow, if permitted| CL[Cloud burst<br/>EKS · AKS · GKE]
   REG[(Signed releases<br/>+ adapters)] --> GPU
@@ -187,6 +189,8 @@ flowchart LR
 - **Router** — admits candidates against tenant, region, data class, context and breaker
   state, then scores what is left. Canary by `blake2b(alias, tenant)`. Reload is atomic: a bad
   file returns 422 and the old policy keeps serving.
+- **Semantic cache** — opt-in per tenant; deterministic near-duplicates are answered by the
+  gateway after admission, scoped to tenant, route and conversation.
 - **Tiers** — one real GPU with two QLoRA adapters; calibrated CPU and cloud simulators that
   label every response `x-simulated: true`.
 - **Releases** — a signed manifest pins the model revision, adapter digests, image digests,
@@ -341,6 +345,7 @@ Full map: [repository map](docs/technical-notes.md#repository-map).
 |---|---|
 | Real clusters, IAM permissions and GPU quotas | [Taking it to real infrastructure](#taking-it-to-real-infrastructure), [deploy/cloud/README.md](deploy/cloud/README.md) |
 | Evidence, contracts and measurement detail | [docs/technical-notes.md](docs/technical-notes.md) |
+| Architecture (C4, engine, cache, measurement views) | [docs/architecture/c4.md](docs/architecture/c4.md) |
 | Why each decision was made | [ADR-0001…0015](docs/adr/) — one record per choice |
 | Prefill/decode, KV and VRAM budget, batching, caching, parallelism — mapped to code | [docs/llm-serving-checklist.md](docs/llm-serving-checklist.md) |
 | Cluster deployment and air gap | [Kubernetes and OpenShift](docs/technical-notes.md#kubernetes-and-openshift) |
