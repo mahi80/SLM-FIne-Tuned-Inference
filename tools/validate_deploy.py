@@ -203,6 +203,8 @@ def check_model_pin(docs: list[dict]) -> list[str]:
             errors.append(f"{label(doc)}: served model name is not {SERVED_MODEL_NAME}")
         if "--enable-lora" not in args:
             errors.append(f"{label(doc)}: multi-LoRA serving is not enabled")
+        if "--enable-prefix-caching" not in arg_list:
+            errors.append(f"{label(doc)}: prefix caching is not enabled")
     return errors
 
 

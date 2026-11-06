@@ -341,7 +341,8 @@ Full map: [repository map](docs/technical-notes.md#repository-map).
 |---|---|
 | Real clusters, IAM permissions and GPU quotas | [Taking it to real infrastructure](#taking-it-to-real-infrastructure), [deploy/cloud/README.md](deploy/cloud/README.md) |
 | Evidence, contracts and measurement detail | [docs/technical-notes.md](docs/technical-notes.md) |
-| Why each decision was made | [ADR-0001…0013](docs/adr/) — one record per choice |
+| Why each decision was made | [ADR-0001…0015](docs/adr/) — one record per choice |
+| Prefill/decode, KV and VRAM budget, batching, caching, parallelism — mapped to code | [docs/llm-serving-checklist.md](docs/llm-serving-checklist.md) |
 | Cluster deployment and air gap | [Kubernetes and OpenShift](docs/technical-notes.md#kubernetes-and-openshift) |
 | The release and review pack | [Signed releases](docs/technical-notes.md#signed-releases-and-the-review-pack), [docs/signoff/](docs/signoff/) |
 | What was not proven | [acceptance.md](docs/signoff/acceptance.md) — A-01…A-30, N-01…N-14, C-01…C-10 |

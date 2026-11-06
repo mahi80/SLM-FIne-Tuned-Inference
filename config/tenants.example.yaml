@@ -28,6 +28,11 @@ tenants:
     # GPU or nothing — which is the point of a budget, not a default.
     # latency_budget_ms: 1000
     admin: true
+    # Opt-in semantic cache: deterministic (temperature 0) requests whose last
+    # user message nearly matches one already answered for this tenant, route
+    # and conversation are served from the gateway without a GPU call. Off by
+    # default; see src/gateway/semantic_cache.py for what is and is not cached.
+    # semantic_cache: true
 
   - id: globex
     api_key: dev-globex-key
